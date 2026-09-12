@@ -9,6 +9,8 @@ source ~/competition_env.sh 2>/dev/null || true
 
 pkill -f '[m]ission.launch'; pkill -f '[m]ission_node'; pkill -f '[o]bstacle_mover'
 pkill -f '[l]lm_parser'; pkill -f '[c]md_vel_watchdog'; pkill -f '[q]uestion_bridge'
+pkill -f '[c]arry_follower'
+pkill -f '[s]can_filter'
 sleep 2
 
 if [ -n "${DEEPSEEK_API_KEY:-}" ]; then

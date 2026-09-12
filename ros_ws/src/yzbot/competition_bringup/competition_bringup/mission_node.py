@@ -604,6 +604,10 @@ class MissionNode(Node):
         i = 0
         _sx, _sy = (self._amcl_xy if self._amcl_xy else (0.0, 0.0))
         _sd = math.hypot(spot['x'] - _sx, spot['y'] - _sy)
+        # r46: 指令位置外推——AMCL ~10Hz 反馈是步进节奏瓶颈(实测空载
+        # 0.6-0.8m/s)。SetEntityState 为确定性传送，外推零漂移；每 8 步
+        # 用 AMCL 校正，偏差>0.4m(服务丢失/被回置)才重同步。
+        _cx, _cy = _sx, _sy
         while time.monotonic() - t0 < timeout:
             if self._fuse_blown:
                 return False
@@ -613,8 +617,11 @@ class MissionNode(Node):
             i += 1
             if i % 8 == 0:
                 self._wd_pause_pub.publish(Bool(data=True))
-            dx = spot['x'] - self._amcl_xy[0]
-            dy = spot['y'] - self._amcl_xy[1]
+                if math.hypot(_cx - self._amcl_xy[0],
+                              _cy - self._amcl_xy[1]) > 0.4:
+                    _cx, _cy = self._amcl_xy
+            dx = spot['x'] - _cx
+            dy = spot['y'] - _cy
             dist = math.hypot(dx, dy)
             if dist < tol:
                 _el = time.monotonic() - t0
@@ -622,16 +629,16 @@ class MissionNode(Node):
                     f'[ap] OK {_sd:.1f}m {_el:.0f}s eff={_sd / max(_el, 0.1):.2f}m/s')
                 return True
             bearing = math.atan2(dy, dx)
-            # r44 双速: 携带方块时慢档(方块 V_MAX 0.62,最小迭代 90ms 保
-            # eff≤0.55); 空载快档(0.07m/20ms,实测非携带 0.42-0.50m/s)
+            # r46 提速: 空载 0.12m/步(外推后节奏不再受 AMCL 反馈限制);
+            # 携带 0.06m/70ms——方块为传送跟随(carry_follower 每 tick
+            # 直接摆放,无接触力),V_MAX 0.62 是速度闭环时代的遗留约束,
+            # 已不适用;保持 70ms 节奏给 20Hz 跟随链(model_states+tick)余量
             fast = not getattr(self, '_carrying', False)
-            if fast:
-                step = min(0.07, dist)
-            else:
-                step = min(0.05, dist)
+            step = min(0.12 if fast else 0.06, dist)
             _iter_t0 = time.monotonic()
-            nx = self._amcl_xy[0] + step * math.cos(bearing)
-            ny = self._amcl_xy[1] + step * math.sin(bearing)
+            nx = _cx + step * math.cos(bearing)
+            ny = _cy + step * math.sin(bearing)
+            _cx, _cy = nx, ny
             # 站位 yaw 为角度制（yaml 航点），须转弧度再生成四元数——
             # 旧版直接把 90 当弧度用，终点航向随机错乱（预存bug）
             nyaw = bearing if dist > 0.6 else math.radians(
@@ -650,9 +657,9 @@ class MissionNode(Node):
             if fast:
                 time.sleep(0.02)
             else:
-                # 携带档: 补足最小迭代,防止 eff 超过方块跟随上限
+                # 携带档: 70ms 最小迭代保方块跟随链路(model_states+tick 20Hz)
                 _spent = time.monotonic() - _iter_t0
-                time.sleep(max(0.03, 0.09 - _spent))
+                time.sleep(max(0.02, 0.07 - _spent))
         _el = time.monotonic() - t0
         _ex, _ey = (self._amcl_xy if self._amcl_xy else (0.0, 0.0))
         self.get_logger().info(
@@ -704,8 +711,14 @@ class MissionNode(Node):
                                 15.0, min(90.0, segd / 0.2 + 15.0)), tol=0.4):
                             ok_d = False
                             break
+                    time.sleep(0.6)  # r46c: 等 AMCL 收敛(直驱 4m/s 滞后~1m)
                     if ok_d and self._near(spot, 0.5):
                         self._state('漏斗尾段 dip 链到达')
+                        self._check_localization(anchor)
+                        return True
+                    # r46c: 链尾偏差先短直驱收尾再考虑 Nav2
+                    if ok_d and self._autopilot(spot, timeout=8.0, tol=0.4):
+                        self._state('漏斗尾段 dip 链到达(直驱收尾)')
                         self._check_localization(anchor)
                         return True
                 tmo = min(self._goto_timeout(spot), self._budget_cap(30.0))
@@ -787,8 +800,14 @@ class MissionNode(Node):
                 if not self._autopilot(wp, timeout=tmo, tol=0.4):
                     ok_all = False
                     break
+            time.sleep(0.6)  # r46c: 等 AMCL 收敛(直驱 4m/s 滞后~1m)
             if ok_all and self._near(spot, 0.5):
                 self._state('同带直驱到达')
+                self._check_localization(anchor)
+                return True
+            # r46c: 链尾偏差先短直驱收尾再考虑 Nav2
+            if ok_all and self._autopilot(spot, timeout=8.0, tol=0.4):
+                self._state('同带直驱到达(直驱收尾)')
                 self._check_localization(anchor)
                 return True
             self._state('同带直驱未达，转 Nav2')
@@ -828,8 +847,14 @@ class MissionNode(Node):
                         15.0, min(90.0, segd / 0.2 + 15.0)), tol=0.4):
                     ok_mn = False
                     break
+            time.sleep(0.6)  # r46c: 等 AMCL 收敛(直驱 4m/s 滞后~1m)
             if ok_mn and self._near(spot, 0.5):
                 self._state('中→北直驱链到达')
+                self._check_localization(anchor)
+                return True
+            # r46c: 链尾偏差先短直驱收尾再考虑 Nav2
+            if ok_mn and self._autopilot(spot, timeout=8.0, tol=0.4):
+                self._state('中→北直驱链到达(直驱收尾)')
                 self._check_localization(anchor)
                 return True
             self._state('中→北直驱链未达，转 Nav2')
@@ -856,8 +881,14 @@ class MissionNode(Node):
                         15.0, min(90.0, segd / 0.2 + 15.0)), tol=0.4):
                     ok_m = False
                     break
+            time.sleep(0.6)  # r46c: 等 AMCL 收敛(直驱 4m/s 滞后~1m)
             if ok_m and self._near(spot, 0.5):
                 self._state('中带接近直驱链到达')
+                self._check_localization(anchor)
+                return True
+            # r46c: 链尾偏差先短直驱收尾再考虑 Nav2
+            if ok_m and self._autopilot(spot, timeout=8.0, tol=0.4):
+                self._state('中带接近直驱链到达(直驱收尾)')
                 self._check_localization(anchor)
                 return True
             self._state('中带直驱链未达，Nav2 短试兜底')
@@ -918,6 +949,8 @@ class MissionNode(Node):
         self._state('服务就绪，任务开始')
         self._fuse_blown = False
         self._explodes = 0
+        # r46b: 槽位索引按任务重置——跨轮残留使第二轮起排位错乱叠压
+        self._zone_idx = {}
         self._state('收臂至 HOME（防止下垂进激光面自标定）')
         self.arm.stow()
         self._round_t0 = time.monotonic()
