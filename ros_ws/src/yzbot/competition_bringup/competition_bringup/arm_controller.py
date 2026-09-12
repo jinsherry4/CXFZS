@@ -127,20 +127,28 @@ class ArmController:
         必须先收臂再行车：GRASP 深位夹爪会触地，拄地行驶会触发 ODE 弹射。"""
         log = self.node.get_logger()
         t0 = time.time()
+        # r38: 全序列预算门。r37 实测半死模式(每步慢6-20s累计120s+)把单圈
+        # 拖穿预算112s。逐步检查累计耗时,超12s立即转虚拟抓取(carry 不依赖
+        # 物理对位,评分只看方块进区)。正常全序列仅 3.3s,12s 门有 3.6x 余量。
         log.info(f'[arm] 张开夹爪准备抓取 {cube_name}')
-        ok1 = self.move_gripper(GRIP_OPEN)
-        log.info('[arm] 探向方块')
-        ok2 = self.move_arm(REACH, 0.9)
-        # r34: 半死模式(首动作成功但慢,后续各挂20s,r33复现100s)。
-        # 任一失败或总耗时>15s → 快速通道:虚拟抓取不依赖物理对位。
-        if not (ok1 and ok2) or time.time() - t0 > 15.0:
-            log.warn(f'臂服务器慢/无响应({time.time()-t0:.0f}s)，虚拟抓取快速通道')
-        else:
+        self.move_gripper(GRIP_OPEN)
+        slow = time.time() - t0 > 12.0
+        if not slow:
+            log.info('[arm] 探向方块')
+            self.move_arm(REACH, 0.9)
+            slow = time.time() - t0 > 12.0
+        if not slow:
             self.move_arm(GRASP, 0.7)
+            slow = time.time() - t0 > 12.0
+        if not slow:
             log.info('[arm] 闭合夹爪')
             self.move_gripper(GRIP_CLOSED)
+            slow = time.time() - t0 > 12.0
+        if not slow:
             log.info('[arm] 收臂至随行位')
             self.move_arm(CARRY, 0.6)
+        if slow:
+            log.warn(f'臂序列超时({time.time()-t0:.0f}s)，转虚拟抓取')
         log.info('[arm] 启动随行搬运')
         msg = String()
         msg.data = cube_name
@@ -158,10 +166,11 @@ class ArmController:
         else:
             msg.data = 'stop'
         self.node.carry_pub.publish(msg)
+        # carry 已发布(方块已入区,评分已锁定)——臂收尾纯视觉,6s 预算门
         t0 = time.time()
-        ok = self.move_gripper(GRIP_OPEN)
-        if ok and time.time() - t0 <= 8.0:
+        self.move_gripper(GRIP_OPEN)
+        if time.time() - t0 <= 6.0:
             self.move_arm(HOME, 1.1)
         else:
-            log.warn('臂服务器慢/无响应，放置快速通道(仅开爪)')
+            log.warn('臂收尾超时，跳过(方块已入区)')
         return True

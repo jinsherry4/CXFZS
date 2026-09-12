@@ -312,7 +312,7 @@ class MissionNode(Node):
     def _over_budget(self):
         if self._round_t0 is None:
             return False
-        budget = float(os.environ.get('MISSION_ROUND_SEC', '295'))
+        budget = float(os.environ.get('MISSION_ROUND_SEC', '230'))
         return time.monotonic() - self._round_t0 > budget
 
     def _near(self, spot, tol):
@@ -476,7 +476,7 @@ class MissionNode(Node):
         213s，直接击穿整轮预算。"""
         if self._round_t0 is None:
             return 240.0
-        budget = float(os.environ.get('MISSION_ROUND_SEC', '295'))
+        budget = float(os.environ.get('MISSION_ROUND_SEC', '230'))
         remain = budget - (time.monotonic() - self._round_t0) - 20.0
         return max(floor, min(240.0, remain))
 
@@ -549,7 +549,7 @@ class MissionNode(Node):
             # r33: 漏斗窄口 Nav2 直航成功率低(r32 实测穿行90s超时+绕行点失败靠autopilot兜底)，
             # 先 autopilot 直达(传送步进视觉连续,漏斗颈 4.8m 宽 obstacle_2 已西缩无交集)，
             # 失败才回退 Nav2。
-            if self._autopilot(via, timeout=45.0):
+            if self._autopilot(via, timeout=15.0):
                 self._state('绕行点自动驾驶仪到达')
                 self._check_localization(anchor)
             elif self.nav.goto(via['x'], via['y'], via['yaw'], timeout_sec=self._goto_timeout(via)):
@@ -653,7 +653,7 @@ class MissionNode(Node):
         self.arm.stow()
         self._round_t0 = time.monotonic()
         t0 = self._round_t0
-        round_budget = float(os.environ.get('MISSION_ROUND_SEC', '295'))
+        round_budget = float(os.environ.get('MISSION_ROUND_SEC', '230'))
         red_req = sum(int(it.get('count', 0)) for it in items if it.get('color') == 'red')
         blue_req = sum(int(it.get('count', 0)) for it in items if it.get('color') == 'blue')
         self.pub_red_req.publish(Int32(data=red_req))
@@ -689,7 +689,7 @@ class MissionNode(Node):
         # 0.65（r16/r17 实测含绕行 0.5-0.65）。单一 0.35 会把边际任务误杀。
         slow_est = float(os.environ.get('MISSION_SPEED_EST', '0.35'))
         fast_est = float(os.environ.get('MISSION_SPEED_FAST', '0.65'))
-        reserve_home = 8.0
+        reserve_home = 25.0
         remaining = list(tasks)
         while remaining:
             if time.monotonic() - t0 > round_budget:
