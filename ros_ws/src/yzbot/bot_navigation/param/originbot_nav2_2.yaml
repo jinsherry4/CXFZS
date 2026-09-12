@@ -132,7 +132,7 @@ controller_server:
       max_robot_pose_search_dist: 10.0
       use_interpolation: true
       debug_trajectory_details: True
-      min_vel_x: 0.0
+      min_vel_x: 0.08
       min_vel_y: 0.0
       max_vel_x: 0.88
       max_vel_y: 0.0          # 差速机器人无侧向速度

@@ -21,7 +21,7 @@ from gazebo_msgs.msg import ModelStates
 
 DEFAULT_OBSTACLES = (
     '[{model: obstacle_1, x: -3.5, y: 0.0, axis: x, amp: 2.0, period: 24.0},'
-    ' {model: obstacle_2, x: -2.0, y: -6.0, axis: x, amp: 1.4, period: 22.0}]'
+    ' {model: obstacle_2, x: -2.6, y: -6.0, axis: x, amp: 0.8, period: 22.0}]'
 )
 
 

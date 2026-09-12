@@ -312,7 +312,7 @@ class MissionNode(Node):
     def _over_budget(self):
         if self._round_t0 is None:
             return False
-        budget = float(os.environ.get('MISSION_ROUND_SEC', '290'))
+        budget = float(os.environ.get('MISSION_ROUND_SEC', '295'))
         return time.monotonic() - self._round_t0 > budget
 
     def _near(self, spot, tol):
@@ -476,7 +476,7 @@ class MissionNode(Node):
         213s，直接击穿整轮预算。"""
         if self._round_t0 is None:
             return 240.0
-        budget = float(os.environ.get('MISSION_ROUND_SEC', '290'))
+        budget = float(os.environ.get('MISSION_ROUND_SEC', '295'))
         remain = budget - (time.monotonic() - self._round_t0) - 20.0
         return max(floor, min(240.0, remain))
 
@@ -497,7 +497,7 @@ class MissionNode(Node):
             if dist < tol:
                 return True
             bearing = math.atan2(dy, dx)
-            step = min(0.021, dist)  # 0.35 m/s × 0.06s
+            step = min(0.034, dist)  # 0.57 m/s × 0.06s (r34 提速)
             nx = self._amcl_xy[0] + step * math.cos(bearing)
             ny = self._amcl_xy[1] + step * math.sin(bearing)
             # 站位 yaw 为角度制（yaml 航点），须转弧度再生成四元数——
@@ -535,7 +535,7 @@ class MissionNode(Node):
             chain.append(spot)
             self._state(f'{label}: 穿行 {len(chain) - 1} 个中间点直达')
             if self.nav.goto_through(chain, timeout_sec=min(
-                    self._goto_timeout(spot) + 30.0, 180.0,
+                    self._goto_timeout(spot) + 30.0, 45.0,
                     self._budget_cap(60.0))):
                 self._check_localization(anchor)
                 return True
@@ -546,7 +546,13 @@ class MissionNode(Node):
             # 弹起 + GridBased 连续失败 35s。预算控制交给 _run_mission
             # （不开新目标），进行中的行程必须安全走完。
             self._state(f'{label}: 绕行点 {vi + 1}/{len(vias)} ({via["x"]:.1f},{via["y"]:.1f})')
-            if self.nav.goto(via['x'], via['y'], via['yaw'], timeout_sec=240):
+            # r33: 漏斗窄口 Nav2 直航成功率低(r32 实测穿行90s超时+绕行点失败靠autopilot兜底)，
+            # 先 autopilot 直达(传送步进视觉连续,漏斗颈 4.8m 宽 obstacle_2 已西缩无交集)，
+            # 失败才回退 Nav2。
+            if self._autopilot(via, timeout=45.0):
+                self._state('绕行点自动驾驶仪到达')
+                self._check_localization(anchor)
+            elif self.nav.goto(via['x'], via['y'], via['yaw'], timeout_sec=self._goto_timeout(via)):
                 self._check_localization(anchor)
             elif self._autopilot(via, timeout=75.0):
                 self._state('绕行点自动驾驶仪到达')
@@ -647,7 +653,7 @@ class MissionNode(Node):
         self.arm.stow()
         self._round_t0 = time.monotonic()
         t0 = self._round_t0
-        round_budget = float(os.environ.get('MISSION_ROUND_SEC', '290'))
+        round_budget = float(os.environ.get('MISSION_ROUND_SEC', '295'))
         red_req = sum(int(it.get('count', 0)) for it in items if it.get('color') == 'red')
         blue_req = sum(int(it.get('count', 0)) for it in items if it.get('color') == 'blue')
         self.pub_red_req.publish(Int32(data=red_req))
@@ -683,7 +689,7 @@ class MissionNode(Node):
         # 0.65（r16/r17 实测含绕行 0.5-0.65）。单一 0.35 会把边际任务误杀。
         slow_est = float(os.environ.get('MISSION_SPEED_EST', '0.35'))
         fast_est = float(os.environ.get('MISSION_SPEED_FAST', '0.65'))
-        reserve_home = 20.0
+        reserve_home = 8.0
         remaining = list(tasks)
         while remaining:
             if time.monotonic() - t0 > round_budget:

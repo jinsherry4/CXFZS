@@ -151,6 +151,9 @@ fi
 echo '[5/6] 启动 rosbridge(coStudio 连 ws://本机IP:9090)...'
 nohup ros2 launch rosbridge_server rosbridge_websocket_launch.xml > ~/comp_logs/rosbridge.log 2>&1 &
 
+echo "[5.5/6] 启动 foxglove_bridge(Foxglove 连 ws://本机IP:8765)..."
+nohup ros2 launch foxglove_bridge foxglove_bridge_launch.xml > ~/comp_logs/foxglove.log 2>&1 &
+
 echo '[6/6] 启动任务链(调度+LLM+移动障碍)...'
 if [ -n "${DEEPSEEK_API_KEY:-}" ]; then
   nohup ros2 launch competition_bringup mission.launch.py api_key:="$DEEPSEEK_API_KEY" obstacles:=true \

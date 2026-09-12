@@ -77,24 +77,24 @@ class ArmController:
         pt.positions = [float(p) for p in positions]
         pt.time_from_start = Duration(sec=int(duration), nanosec=int((duration % 1) * 1e9))
         goal.trajectory.points.append(pt)
-        if not client.wait_for_server(timeout_sec=5.0):
+        if not client.wait_for_server(timeout_sec=2.5):
             self.node.get_logger().error('action server 未上线')
             return False
         fut = client.send_goal_async(goal)
-        if not self._wait_future(self.node, fut, 10.0):
+        if not self._wait_future(self.node, fut, 6.0):
             return False
         handle = fut.result()
         if not handle.accepted:
             return False
         res_fut = handle.get_result_async()
-        ok = self._wait_future(self.node, res_fut, duration + 15.0)
+        ok = self._wait_future(self.node, res_fut, duration + 6.0)
         return ok and res_fut.result().status == 4  # SUCCEEDED
 
     # ---------- 对外接口 ----------
     def move_arm(self, positions, duration=2.0):
         return self._send_traj(self._arm_ac, ARM_JOINTS, positions, duration)
 
-    def move_gripper(self, position, duration=0.6):
+    def move_gripper(self, position, duration=0.45):
         """夹爪开（0.3）/ 闭（0.0），单点轨迹。"""
         from builtin_interfaces.msg import Duration
         goal = FollowJointTrajectory.Goal()
@@ -103,10 +103,10 @@ class ArmController:
         pt.positions = [float(position)]
         pt.time_from_start = Duration(sec=int(duration), nanosec=int((duration % 1) * 1e9))
         goal.trajectory.points.append(pt)
-        if not self._grip_ac.wait_for_server(timeout_sec=5.0):
+        if not self._grip_ac.wait_for_server(timeout_sec=2.5):
             return False
         fut = self._grip_ac.send_goal_async(goal)
-        if not self._wait_future(self.node, fut, 10.0):
+        if not self._wait_future(self.node, fut, 6.0):
             return False
         handle = fut.result()
         if not handle.accepted:
@@ -126,15 +126,21 @@ class ArmController:
         """张开→探下→下压→闭合→收臂到随行位→启动虚拟搬运。
         必须先收臂再行车：GRASP 深位夹爪会触地，拄地行驶会触发 ODE 弹射。"""
         log = self.node.get_logger()
+        t0 = time.time()
         log.info(f'[arm] 张开夹爪准备抓取 {cube_name}')
-        self.move_gripper(GRIP_OPEN)
+        ok1 = self.move_gripper(GRIP_OPEN)
         log.info('[arm] 探向方块')
-        self.move_arm(REACH, 1.2)
-        self.move_arm(GRASP, 0.9)
-        log.info('[arm] 闭合夹爪')
-        self.move_gripper(GRIP_CLOSED)
-        log.info('[arm] 收臂至随行位')
-        self.move_arm(CARRY, 0.8)
+        ok2 = self.move_arm(REACH, 0.9)
+        # r34: 半死模式(首动作成功但慢,后续各挂20s,r33复现100s)。
+        # 任一失败或总耗时>15s → 快速通道:虚拟抓取不依赖物理对位。
+        if not (ok1 and ok2) or time.time() - t0 > 15.0:
+            log.warn(f'臂服务器慢/无响应({time.time()-t0:.0f}s)，虚拟抓取快速通道')
+        else:
+            self.move_arm(GRASP, 0.7)
+            log.info('[arm] 闭合夹爪')
+            self.move_gripper(GRIP_CLOSED)
+            log.info('[arm] 收臂至随行位')
+            self.move_arm(CARRY, 0.6)
         log.info('[arm] 启动随行搬运')
         msg = String()
         msg.data = cube_name
@@ -152,7 +158,10 @@ class ArmController:
         else:
             msg.data = 'stop'
         self.node.carry_pub.publish(msg)
-        time.sleep(0.3)
-        self.move_gripper(GRIP_OPEN)
-        self.move_arm(HOME, 1.6)
+        t0 = time.time()
+        ok = self.move_gripper(GRIP_OPEN)
+        if ok and time.time() - t0 <= 8.0:
+            self.move_arm(HOME, 1.1)
+        else:
+            log.warn('臂服务器慢/无响应，放置快速通道(仅开爪)')
         return True

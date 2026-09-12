@@ -18,8 +18,8 @@ from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from std_msgs.msg import String
 
-K_P = 3.0        # 位置误差 -> 速度
-V_MAX = 0.5      # 跟随速度上限 m/s（过快会把方块顶进墙触发 ODE 弹飞）
+K_P = 3.5        # 位置误差 -> 速度
+V_MAX = 0.62      # 跟随速度上限 m/s（过快会把方块顶进墙触发 ODE 弹飞）
 R_SAFE = 0.50    # 方块-底盘中心最小安全距离（防挤压弹飞）
 CARRY_Z = 0.16
 CUBE_REST_Z = 0.015  # 方块静息高度（与原生方块一致）；释放时落地，杜绝悬空障碍

@@ -345,9 +345,8 @@ function draw() {
     document.getElementById('stt').textContent =
       `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
   }
-  requestAnimationFrame(draw);
-}
-requestAnimationFrame(draw);
+  }
+setInterval(draw, 200);
 connect();
 </script>
 </body>

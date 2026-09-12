@@ -64,7 +64,7 @@ class CmdVelWatchdog(Node):
             dt = now - self.prev_t
             if dt > 0.2:
                 sp = math.hypot(p.x - self.prev_pos[0], p.y - self.prev_pos[1]) / dt
-                if self.cmd_mag > 0.02 and sp < 0.02:
+                if self.cmd_mag > 0.08 and sp < 0.02:
                     self.stuck_t += dt
                 else:
                     self.stuck_t = 0.0
