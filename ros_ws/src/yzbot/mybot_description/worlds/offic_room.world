@@ -2081,7 +2081,7 @@
     </plugin>
 </model>
     <model name='blue_cube_5'>
-      <pose>-8.000 -3.500 0.015 0 0 0</pose>
+      <pose>-8.000 -3.750 0.015 0 0 0</pose>
       <link name='link'>
         <gravity>0</gravity>
         <inertial>

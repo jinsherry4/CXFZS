@@ -1,7 +1,9 @@
 #!/bin/bash
 # 面板终极清场版：彻底杀 + 清 profile + HTTP 单窗口
 export DISPLAY=:0
-export XAUTHORITY=/run/user/1000/.mutter-Xwaylandauth.L15AV3
+# Xwayland auth 文件每次会话随机变化，动态获取（获取失败则不设，实测不设也能用）
+_XAUTH=$(pgrep -af Xwayland | grep -oP '(?<=-auth )\S+' | head -1)
+[ -n "$_XAUTH" ] && [ -f "$_XAUTH" ] && export XAUTHORITY=$_XAUTH
 
 # 1. 确认 HTTP 服务活着
 curl -s -o /dev/null -m 3 http://localhost:8080/dashboard.html || {
@@ -9,6 +11,10 @@ curl -s -o /dev/null -m 3 http://localhost:8080/dashboard.html || {
   sleep 2
 }
 curl -s -o /dev/null -m 3 -w "http=%{http_code}\n" http://localhost:8080/dashboard.html
+
+# 1.5 杀 RViz（nav launch 默认启动，演示布局不需要）
+pkill -f '[r]viz2' 2>/dev/null; sleep 1; pkill -9 -f '[r]viz2' 2>/dev/null
+pgrep -f '[r]viz2' >/dev/null && echo RVIZ_STILL_ALIVE || echo RVIZ_DEAD
 
 # 2. 彻底杀 epiphany（等死透）
 pkill -x epiphany 2>/dev/null
