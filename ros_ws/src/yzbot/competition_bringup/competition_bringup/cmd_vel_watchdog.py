@@ -10,6 +10,7 @@ import math
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
+from std_msgs.msg import Bool
 from gazebo_msgs.msg import ModelStates
 from gazebo_msgs.srv import SetEntityState
 
@@ -46,8 +47,20 @@ class CmdVelWatchdog(Node):
         # 重力无法使其回落——机器人悬空冻结，里程计/激光全废。
         # 这里监测真值高度，发现离地即放回地面。
         self.create_subscription(ModelStates, '/model_states', self.on_states, 10)
+        # r41: autopilot 直驱期间暂停卡死/悬空回置——两者都靠 SetEntityState
+        # 操作机器人，同时工作会互相拽（r40 实测直驱 28s 超时全败于此）。
+        self.pause_until = 0.0
+        self.create_subscription(Bool, '/watchdog/pause', self.on_pause, 10)
         self.cli_set = self.create_client(SetEntityState, '/set_entity_state')
         self.get_logger().info(f'cmd_vel看门狗: {topic} 超时{self.timeout}s + 悬空回置')
+
+    def on_pause(self, msg):
+        # True=暂停 2s（周期重发续期）；False=立即恢复
+        now = self.get_clock().now().nanoseconds * 1e-9
+        if msg.data:
+            self.pause_until = max(self.pause_until, now + 2.0)
+        else:
+            self.pause_until = 0.0
 
     def on_states(self, m):
         if 'six_arm' not in m.name:
@@ -68,7 +81,8 @@ class CmdVelWatchdog(Node):
                     self.stuck_t += dt
                 else:
                     self.stuck_t = 0.0
-                if self.stuck_t > 2.5 and now > self.cool_until:
+                if (self.stuck_t > 2.5 and now > self.cool_until
+                        and now > self.pause_until):
                     self.cool_until = now + 3.0
                     self.stuck_t = 0.0
                     yaw = getattr(self, '_yaw', 0.0)
@@ -91,7 +105,8 @@ class CmdVelWatchdog(Node):
             if self._lift_since is None:
                 self._lift_since = now_sec
             elif (now_sec - self._lift_since >= LIFT_CONFIRM_SEC
-                    and now_sec > self.cool_until):
+                    and now_sec > self.cool_until
+                    and now_sec > self.pause_until):
                 self._lift_since = None
                 self.cool_until = now_sec + 3.0
                 req = SetEntityState.Request()

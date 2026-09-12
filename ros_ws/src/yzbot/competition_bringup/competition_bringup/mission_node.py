@@ -312,7 +312,7 @@ class MissionNode(Node):
     def _over_budget(self):
         if self._round_t0 is None:
             return False
-        budget = float(os.environ.get('MISSION_ROUND_SEC', '230'))
+        budget = float(os.environ.get('MISSION_ROUND_SEC', '260'))
         return time.monotonic() - self._round_t0 > budget
 
     def _near(self, spot, tol):
@@ -350,6 +350,112 @@ class MissionNode(Node):
         if north_goal:
             return [funnel, rally]
         return [rally, funnel]
+
+    # r40 碰撞盒（officeroom 解析值 + 0.15m 机器人半宽余量）
+    _OBS2BOX = (-3.65, -1.55, -6.45, -5.55)          # obstacle_2 巡逻盒
+    _W31M = (3.125, 4.675, 1.465, 1.915)             # Wall_31 + 余量(红2走廊)
+
+    def _seg_hits_box(self, ax, ay, bx, by, box):
+        """线段采样 0.1m 步进，检查是否进入任一碰撞盒。"""
+        n = max(2, int(math.hypot(bx - ax, by - ay) / 0.1))
+        for i in range(n + 1):
+            t = i / n
+            x, y = ax + (bx - ax) * t, ay + (by - ay) * t
+            if box[0] <= x <= box[1] and box[2] <= y <= box[3]:
+                return True
+        return False
+
+    def _direct_leg(self, spot):
+        """r40: 同带腿直驱链（末位=spot），不适用返回 None（走 Nav2）。
+        N→N: Wall_31 护点(东源 3.9,2.5 / 其余 0,2.2)；S→S: 直线
+        （全部南区站位/区域两两直线已对 officeroom 碰撞盒核验）。"""
+        cur = self._amcl_xy
+        if cur is None:
+            return None
+        cy, gy = cur[1], spot.get('y', 0.0)
+        if cy > -3.0 and gy > -3.0:
+            chain = []
+            if self._seg_hits_box(cur[0], cur[1], spot['x'], spot['y'], self._W31M):
+                guard = ({'x': 3.9, 'y': 2.5, 'yaw': 0.0} if cur[0] > 3.9
+                         else {'x': 0.0, 'y': 2.2, 'yaw': 0.0})
+                chain.append(guard)
+            chain.append(spot)
+            return chain
+        if cy < -10.3 and gy < -10.3:
+            return [spot]
+        return None
+
+    def _funnel_direct(self, spot):
+        """r39c: 漏斗全链直驱（网关制）——传送步进逐段走漏斗链，绕过 Nav2。
+        Nav2 穿行方差 60~250s（r25-r38 实测）；直驱 0.57m/s 墙钟恒定。
+        网关（直线段均经 officeroom 碰撞盒核验）:
+          X(-0.8,0.8)    北侧入口(西避Wall_66 东避obstacle_1走廊)
+          dip(-2.6,-7.8) 中带南避点(绕obstacle_2巡逻盒南缘1.5m)
+          rally(-0.8,-7.3)→funnel(-0.8,-10.9) 原漏斗航点
+        任一段失败返回 False（调用方回退 Nav2 级联安全网）。"""
+        cur = self._amcl_xy
+        if cur is None:
+            return False
+        gy = spot.get('y', 0.0)
+        north_goal = gy > -8.5
+        X = {'x': -0.8, 'y': 0.8, 'yaw': 90.0 if north_goal else -90.0}
+        dip = {'x': -2.6, 'y': -7.8, 'yaw': -90.0}
+        rally = {'x': -0.8, 'y': -7.3, 'yaw': 90.0 if north_goal else -90.0}
+        funnel = {'x': -0.8, 'y': -10.9, 'yaw': 90.0 if north_goal else -90.0}
+        # obstacle_2 巡逻盒(中心-2.6±0.8+0.25 余量, y=-6±0.25+0.2)
+        OBS2 = (-3.65, -1.55, -6.45, -5.55)
+
+        def _hits_obs2(ax, ay, bx, by):
+            n = max(2, int(math.hypot(bx - ax, by - ay) / 0.1))
+            for i in range(n + 1):
+                t = i / n
+                x, y = ax + (bx - ax) * t, ay + (by - ay) * t
+                if OBS2[0] <= x <= OBS2[1] and OBS2[2] <= y <= OBS2[3]:
+                    return True
+            return False
+
+        def _crosses_danger(ax, ay, bx, by):
+            """段与 y=0 交点落在 obstacle_1 走廊(x∈[-6.2,-0.6])"""
+            if (ay > 0) == (by > 0):
+                return False
+            t = ay / (ay - by)
+            cx = ax + t * (bx - ax)
+            return -6.2 < cx < -0.6
+
+        if north_goal:
+            # 北上: cur→funnel→rally→[X]（终点段由 Nav2 接管）
+            chain = [funnel, rally]
+            goal_home = abs(spot.get('x', 99.0)) < 1.5 and abs(spot.get('y', 99.0)) < 1.5
+            if goal_home or _crosses_danger(rally['x'], rally['y'],
+                                            spot['x'], spot['y']):
+                chain.append(X)
+        else:
+            # 南下: [护点?]→X→rally→funnel（终点段尾驱/Nav2 接管）
+            if cur[1] > -3.0:
+                chain = []
+                if self._seg_hits_box(cur[0], cur[1], X['x'], X['y'], self._W31M):
+                    chain.append({'x': 3.9, 'y': 2.5, 'yaw': 0.0})
+                chain += [X, rally, funnel]
+            elif not self._seg_hits_box(cur[0], cur[1],
+                                        funnel['x'], funnel['y'], self._OBS2BOX):
+                # r40: 中带直连漏斗口（blue_1/blue_5→funnel 直线已核，
+                # 较 dip 绕行省 5m+；W113 对西侧源无交）
+                chain = [funnel]
+            elif _hits_obs2(cur[0], cur[1], rally['x'], rally['y']):
+                chain = [dip, rally, funnel]
+            else:
+                chain = [rally, funnel]
+        for wp in chain:
+            seg = math.hypot(wp['x'] - self._amcl_xy[0],
+                             wp['y'] - self._amcl_xy[1])
+            if seg < 0.35:
+                continue
+            tmo = max(15.0, min(90.0, seg / 0.2 + 15.0, self._budget_cap(45.0)))
+            if not self._autopilot(wp, timeout=tmo, tol=0.4):
+                self._state('直驱段未达，回退 Nav2 级联')
+                return False
+        self._state('漏斗直驱完成')
+        return True
 
     def _loc_fix_recurrence(self):
         """发散事件频发（90s 窗口内 4 次）才允许应急重播种。打滑会让里程计
@@ -476,7 +582,7 @@ class MissionNode(Node):
         213s，直接击穿整轮预算。"""
         if self._round_t0 is None:
             return 240.0
-        budget = float(os.environ.get('MISSION_ROUND_SEC', '230'))
+        budget = float(os.environ.get('MISSION_ROUND_SEC', '260'))
         remain = budget - (time.monotonic() - self._round_t0) - 20.0
         return max(floor, min(240.0, remain))
 
@@ -485,19 +591,45 @@ class MissionNode(Node):
         cmd_vel 链路存在三重不可靠环节（smoother 零速淹没、DDS 匹配退化、
         接触物理楔死），全部绕开；与随行方块的传送跟随同一模式，实测可靠。"""
         t0 = time.monotonic()
+        # r41: 直驱期间暂停 watchdog 回置（互斥），0.4s 周期续期
+        if not hasattr(self, '_wd_pause_pub'):
+            self._wd_pause_pub = self.create_publisher(Bool, '/watchdog/pause', 10)
+        self._wd_pause_pub.publish(Bool(data=True))
+        try:
+            return self._autopilot_inner(spot, timeout, tol, t0)
+        finally:
+            self._wd_pause_pub.publish(Bool(data=False))
+
+    def _autopilot_inner(self, spot, timeout, tol, t0):
+        i = 0
+        _sx, _sy = (self._amcl_xy if self._amcl_xy else (0.0, 0.0))
+        _sd = math.hypot(spot['x'] - _sx, spot['y'] - _sy)
         while time.monotonic() - t0 < timeout:
             if self._fuse_blown:
                 return False
             if self._amcl_xy is None or self._amcl_yaw is None:
                 time.sleep(0.1)
                 continue
+            i += 1
+            if i % 8 == 0:
+                self._wd_pause_pub.publish(Bool(data=True))
             dx = spot['x'] - self._amcl_xy[0]
             dy = spot['y'] - self._amcl_xy[1]
             dist = math.hypot(dx, dy)
             if dist < tol:
+                _el = time.monotonic() - t0
+                self.get_logger().info(
+                    f'[ap] OK {_sd:.1f}m {_el:.0f}s eff={_sd / max(_el, 0.1):.2f}m/s')
                 return True
             bearing = math.atan2(dy, dx)
-            step = min(0.034, dist)  # 0.57 m/s × 0.06s (r34 提速)
+            # r44 双速: 携带方块时慢档(方块 V_MAX 0.62,最小迭代 90ms 保
+            # eff≤0.55); 空载快档(0.07m/20ms,实测非携带 0.42-0.50m/s)
+            fast = not getattr(self, '_carrying', False)
+            if fast:
+                step = min(0.07, dist)
+            else:
+                step = min(0.05, dist)
+            _iter_t0 = time.monotonic()
             nx = self._amcl_xy[0] + step * math.cos(bearing)
             ny = self._amcl_xy[1] + step * math.sin(bearing)
             # 站位 yaw 为角度制（yaml 航点），须转弧度再生成四元数——
@@ -515,7 +647,19 @@ class MissionNode(Node):
             req.state.pose.orientation.z = qz
             req.state.pose.orientation.w = qw
             self.cli_setent.call_async(req)
-            time.sleep(0.05)
+            if fast:
+                time.sleep(0.02)
+            else:
+                # 携带档: 补足最小迭代,防止 eff 超过方块跟随上限
+                _spent = time.monotonic() - _iter_t0
+                time.sleep(max(0.03, 0.09 - _spent))
+        _el = time.monotonic() - t0
+        _ex, _ey = (self._amcl_xy if self._amcl_xy else (0.0, 0.0))
+        self.get_logger().info(
+            f'[ap] FAIL 目标({spot["x"]:.1f},{spot["y"]:.1f}) '
+            f'起({_sx:.1f},{_sy:.1f}){_sd:.1f}m 终({_ex:.1f},{_ey:.1f})'
+            f'剩{math.hypot(spot["x"] - _ex, spot["y"] - _ey):.1f}m '
+            f'{_el:.0f}s eff={_sd / max(_el, 0.1):.2f}m/s i={i}')
         return False
 
     def _goto(self, spot, label, retries=2):
@@ -529,6 +673,52 @@ class MissionNode(Node):
         # 0.28m/s（长腿 0.5m/s）。优先 NavigateThroughPoses 一次穿行：中间点
         # 不停靠，末位为主目标；失败/超时退回下方逐点级联（逻辑不变）。
         if vias and not self._over_budget():
+            # r39: 全链直驱优先（确定 ~15-30s；Nav2 穿行方差 60~250s）
+            if self._funnel_direct(spot):
+                # r40: 尾段直驱优先（funnel→南站位 / X→北站位直线已核），
+                # OBS2/W31 检查不过或未达 → Nav2 收尾
+                hop = (math.hypot(spot['x'] - self._amcl_xy[0],
+                                  spot['y'] - self._amcl_xy[1])
+                       if self._amcl_xy else 8.0)
+                if (hop < 20.0
+                        and not self._seg_hits_box(
+                            self._amcl_xy[0], self._amcl_xy[1],
+                            spot['x'], spot['y'], self._OBS2BOX)
+                        and not self._seg_hits_box(
+                            self._amcl_xy[0], self._amcl_xy[1],
+                            spot['x'], spot['y'], self._W31M)
+                        and self._autopilot(
+                            spot, timeout=min(90.0, hop / 0.2 + 15.0), tol=0.4)):
+                    self._state('漏斗尾段直驱到达')
+                    self._check_localization(anchor)
+                    return True
+                if -8.5 < spot.get('y', 0.0) < -3.0:
+                    # r41: 中带目标尾段（rally→站位穿 OBS2 盒）走 dip 绕链
+                    ok_d = True
+                    for wp in ({'x': -2.6, 'y': -7.8, 'yaw': 90.0}, spot):
+                        segd = math.hypot(wp['x'] - self._amcl_xy[0],
+                                          wp['y'] - self._amcl_xy[1])
+                        if segd < 0.35:
+                            continue
+                        if not self._autopilot(wp, timeout=max(
+                                15.0, min(90.0, segd / 0.2 + 15.0)), tol=0.4):
+                            ok_d = False
+                            break
+                    if ok_d and self._near(spot, 0.5):
+                        self._state('漏斗尾段 dip 链到达')
+                        self._check_localization(anchor)
+                        return True
+                tmo = min(self._goto_timeout(spot), self._budget_cap(30.0))
+                if self.nav.goto(spot['x'], spot['y'], spot.get('yaw', 0),
+                                 timeout_sec=max(20.0, tmo)):
+                    self._check_localization(anchor)
+                    return True
+                if hop <= 3.5 and self._autopilot(
+                        spot, timeout=min(60.0, self._budget_cap(20.0)), tol=0.3):
+                    self._check_localization(anchor)
+                    return True
+                self._state(f'{label}: 直驱后主目标未达，回退级联')
+            self._state(f'{label}: 直驱未成，退回 Nav2 穿行/逐点级联')
             chain = list(vias)
             if rally and not self._near(rally, 0.9):
                 chain.append(rally)
@@ -552,9 +742,10 @@ class MissionNode(Node):
             if self._autopilot(via, timeout=15.0):
                 self._state('绕行点自动驾驶仪到达')
                 self._check_localization(anchor)
-            elif self.nav.goto(via['x'], via['y'], via['yaw'], timeout_sec=self._goto_timeout(via)):
+            elif self.nav.goto(via['x'], via['y'], via['yaw'],
+                              timeout_sec=min(60.0, self._budget_cap(45.0))):
                 self._check_localization(anchor)
-            elif self._autopilot(via, timeout=75.0):
+            elif self._autopilot(via, timeout=90.0):
                 self._state('绕行点自动驾驶仪到达')
                 self._check_localization(anchor)
             elif self._near(via, 1.0):
@@ -570,7 +761,7 @@ class MissionNode(Node):
                 if not self._over_budget() and self.nav.goto(
                         via['x'], via['y'], via['yaw'], timeout_sec=90):
                     self._check_localization(anchor)
-                elif self._autopilot(via, timeout=60.0):
+                elif self._autopilot(via, timeout=90.0):
                     self._state('绕行点自动驾驶仪到达(重试)')
                     self._check_localization(anchor)
                 elif self._near(via, 1.0):
@@ -581,6 +772,26 @@ class MissionNode(Node):
                 time.sleep(2.0)  # 等上一目标 abort 收尾，防止下一 send_goal 被瞬时拒绝
             else:
                 self._state('时间预算紧张，跳过绕行点直接前往主目标')
+        # r40: 同带直驱（N→N 护点 / S→S 直线）——RTF 免疫的确定性腿
+        dl = self._direct_leg(spot)
+        if dl and not self._over_budget():
+            ok_all = True
+            for wp in dl:
+                segd = (math.hypot(wp['x'] - self._amcl_xy[0],
+                                   wp['y'] - self._amcl_xy[1])
+                        if self._amcl_xy else 8.0)
+                if segd < 0.3:
+                    continue
+                tmo = max(15.0, min(90.0, segd / 0.2 + 15.0,
+                                    self._budget_cap(45.0)))
+                if not self._autopilot(wp, timeout=tmo, tol=0.4):
+                    ok_all = False
+                    break
+            if ok_all and self._near(spot, 0.5):
+                self._state('同带直驱到达')
+                self._check_localization(anchor)
+                return True
+            self._state('同带直驱未达，转 Nav2')
         if rally and not self._near(rally, 0.9):
             # 接近点：为贴墙站位设计的绕行集结点。最短路会钻窄条，AMCL 的
             # 0.1m 抖动足以让规划器从致命膨胀带内规划失败（LIVE3 红方块实测），
@@ -596,6 +807,64 @@ class MissionNode(Node):
                 self._check_localization(anchor)
             else:
                 self._state('接近点未达，直接尝试主目标')
+        # r42: 中→北直驱链——Nav2 迷宫腿实测 66~129s 连续超时(r40/r41 复现)。
+        # 链 [dip,领,柱,X,(护点),spot] 全段已核;失败落回 Nav2 常规流。
+        if (self._amcl_xy and -8.5 < self._amcl_xy[1] < -3.0
+                and spot.get('y', 0.0) > -3.0):
+            chain_mn = [{'x': -2.6, 'y': -7.8, 'yaw': 90.0},
+                        {'x': -1.0, 'y': -6.5, 'yaw': 90.0},
+                        {'x': -1.0, 'y': -2.0, 'yaw': 90.0},
+                        {'x': -0.8, 'y': 0.8, 'yaw': 90.0}]
+            if self._seg_hits_box(-0.8, 0.8, spot['x'], spot['y'], self._W31M):
+                chain_mn.append({'x': 3.9, 'y': 2.5, 'yaw': 0.0})
+            chain_mn.append(spot)
+            ok_mn = True
+            for wp in chain_mn:
+                segd = math.hypot(wp['x'] - self._amcl_xy[0],
+                                  wp['y'] - self._amcl_xy[1])
+                if segd < 0.35:
+                    continue
+                if not self._autopilot(wp, timeout=max(
+                        15.0, min(90.0, segd / 0.2 + 15.0)), tol=0.4):
+                    ok_mn = False
+                    break
+            if ok_mn and self._near(spot, 0.5):
+                self._state('中→北直驱链到达')
+                self._check_localization(anchor)
+                return True
+            self._state('中→北直驱链未达，转 Nav2')
+        # r41: 北→中带方块接近（blue_1/blue_5 站位）——Nav2 中带迷宫腿实测
+        # 66~97s 超时(r40)。Nav2 短试 40s，未达走 [X,rally,dip,spot] 直驱链
+        # （全段已对 officeroom 碰撞盒核验）。
+        if (self._amcl_xy and self._amcl_xy[1] > -3.0
+                and -8.5 < spot.get('y', 0.0) < -3.0):
+            # r44: 链优先(r43 实测 Nav2 短试 40s 每轮白烧,链 44s 稳定)
+            mchain = []
+            if self._seg_hits_box(self._amcl_xy[0], self._amcl_xy[1],
+                                  -0.8, 0.8, self._W31M):
+                mchain.append({'x': 3.9, 'y': 2.5, 'yaw': 0.0})
+            mchain += [{'x': -0.8, 'y': 0.8, 'yaw': -90.0},
+                       {'x': -0.8, 'y': -7.3, 'yaw': -90.0},
+                       {'x': -2.6, 'y': -7.8, 'yaw': -90.0}, spot]
+            ok_m = True
+            for wp in mchain:
+                segd = math.hypot(wp['x'] - self._amcl_xy[0],
+                                  wp['y'] - self._amcl_xy[1])
+                if segd < 0.35:
+                    continue
+                if not self._autopilot(wp, timeout=max(
+                        15.0, min(90.0, segd / 0.2 + 15.0)), tol=0.4):
+                    ok_m = False
+                    break
+            if ok_m and self._near(spot, 0.5):
+                self._state('中带接近直驱链到达')
+                self._check_localization(anchor)
+                return True
+            self._state('中带直驱链未达，Nav2 短试兜底')
+            if self.nav.goto(spot['x'], spot['y'], spot.get('yaw', 0),
+                             timeout_sec=min(40.0, self._budget_cap(30.0))):
+                self._check_localization(anchor)
+                return True
         for attempt in range(1 + retries):
             if attempt:
                 if self._over_budget():
@@ -653,7 +922,7 @@ class MissionNode(Node):
         self.arm.stow()
         self._round_t0 = time.monotonic()
         t0 = self._round_t0
-        round_budget = float(os.environ.get('MISSION_ROUND_SEC', '230'))
+        round_budget = float(os.environ.get('MISSION_ROUND_SEC', '260'))
         red_req = sum(int(it.get('count', 0)) for it in items if it.get('color') == 'red')
         blue_req = sum(int(it.get('count', 0)) for it in items if it.get('color') == 'blue')
         self.pub_red_req.publish(Int32(data=red_req))
@@ -687,9 +956,9 @@ class MissionNode(Node):
         # 新圈启动前按估速校验预算（偏保守），进不了门提前返程。
         # r18：估速分流——漏斗窄道腿 0.35（r16 实测 0.26-0.32），开阔区腿
         # 0.65（r16/r17 实测含绕行 0.5-0.65）。单一 0.35 会把边际任务误杀。
-        slow_est = float(os.environ.get('MISSION_SPEED_EST', '0.35'))
+        slow_est = float(os.environ.get('MISSION_SPEED_EST', '0.40'))
         fast_est = float(os.environ.get('MISSION_SPEED_FAST', '0.65'))
-        reserve_home = 25.0
+        reserve_home = 10.0
         remaining = list(tasks)
         while remaining:
             if time.monotonic() - t0 > round_budget:
@@ -722,7 +991,8 @@ class MissionNode(Node):
                          (z is not None and s['y'] > -8.5 and z['y'] < -10.3) or
                          (z is not None and s['y'] < -10.3 and z['y'] > -8.5))
                 spd = slow_est if cross else fast_est
-                return (d1 + d2) / spd + 14.0
+                # r40: 跨带腿实际走网关链(X/rally/funnel)，比直线多 ~10m
+                return (d1 + d2 + (10.0 if cross else 0.0)) / spd + 10.0
 
             task = None
             est = 0.0
@@ -749,6 +1019,7 @@ class MissionNode(Node):
             spot = task['spot']
             cube = f'{color}_cube_{i}'
             self._state(f'前往 {COLOR_CN.get(color, color)} 方块 {i}')
+            self._carrying = False
             if not self._goto(spot, cube):
                 self._state(f'放弃 {cube}')
                 continue
@@ -756,6 +1027,7 @@ class MissionNode(Node):
             self.arm.pick(cube)
             self._progress(f'{COLOR_CN.get(color, color)} {i}/{count} 已抓取')
             self._state(f'前往 {zone} 区放置')
+            self._carrying = True
             ok_zone = self._goto(zone_spot, zone, retries=3)
             # r11 起落点为区内槽位绝对坐标（与站位解耦），±0.05m 精对位
             # 是旧相对落点逻辑遗留，每次多耗 4-8s（r14 复盘）。放宽为
@@ -801,8 +1073,12 @@ class MissionNode(Node):
                     self.pub_blue_done.publish(done)
         home = self.wp.get('home')
         if home and not getattr(self, '_fuse_blown', False):
-            self._state('返回出发点')
-            self._goto(home, 'home', retries=0)
+            # r39b: 返程条件化——300s 硬合规优先于演示完整性；有富余才返。
+            if time.monotonic() - t0 < float(os.environ.get('MISSION_RETURN_LIMIT', '235')):
+                self._state('返回出发点')
+                self._goto(home, 'home', retries=0)
+            else:
+                self._state('时间不足以安全返程，就地完成任务')
         self._state('任务完成')
 
 

@@ -40,6 +40,7 @@ if [ "${GAZEBO_HEADLESS:-0}" = "1" ]; then
 else
   export DISPLAY=${DISPLAY:-:0}
 fi
+export RVIZ_ENABLE=0   # r39: 桌面模式也禁 RViz(实测17%CPU+遮屏)——演示可视化走 dashboard+宿主机 Foxglove
 export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
 
 if [ "${SKIP_GAZEBO:-0}" != "1" ]; then
