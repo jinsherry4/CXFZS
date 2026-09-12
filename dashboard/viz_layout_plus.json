@@ -1,0 +1,376 @@
+{
+  "configById": {
+    "RawMessages!3o3lizc": {
+      "diffEnabled": false,
+      "diffMethod": "custom",
+      "diffTopicPath": "",
+      "showFullMessageForDiff": false,
+      "topicPath": "/mission/task_info",
+      "fontSize": 9
+    },
+    "Tab!u7p6y3": {
+      "activeTabIdx": 0,
+      "tabs": [
+        {
+          "title": "题目",
+          "layout": "RawMessages!3o3lizc"
+        }
+      ]
+    },
+    "Indicator!2h77mwf": {
+      "path": "/mission/red_required.data",
+      "style": "background",
+      "fallbackColor": "#8bc1e0",
+      "fallbackLabel": "0",
+      "rules": [
+        {
+          "operator": "=",
+          "rawValue": "0",
+          "color": "#8bc1e0",
+          "label": "0"
+        },
+        {
+          "operator": "=",
+          "rawValue": "1",
+          "color": "#68e24a",
+          "label": "1"
+        },
+        {
+          "operator": "=",
+          "rawValue": "2",
+          "color": "#68e24a",
+          "label": "2"
+        },
+        {
+          "operator": "=",
+          "rawValue": "3",
+          "color": "#f5a623",
+          "label": "3"
+        },
+        {
+          "operator": "=",
+          "rawValue": "4",
+          "color": "#f5a623",
+          "label": "4"
+        },
+        {
+          "operator": "=",
+          "rawValue": "5",
+          "color": "#eb6774",
+          "label": "5"
+        }
+      ],
+      "foxglovePanelTitle": "红色数量"
+    },
+    "Indicator!3e09x78": {
+      "path": "/mission/blue_required.data",
+      "style": "background",
+      "fallbackColor": "#8bc1e0",
+      "fallbackLabel": "0",
+      "rules": [
+        {
+          "operator": "=",
+          "rawValue": "0",
+          "color": "#8bc1e0",
+          "label": "0"
+        },
+        {
+          "operator": "=",
+          "rawValue": "1",
+          "color": "#68e24a",
+          "label": "1"
+        },
+        {
+          "operator": "=",
+          "rawValue": "2",
+          "color": "#68e24a",
+          "label": "2"
+        },
+        {
+          "operator": "=",
+          "rawValue": "3",
+          "color": "#f5a623",
+          "label": "3"
+        },
+        {
+          "operator": "=",
+          "rawValue": "4",
+          "color": "#f5a623",
+          "label": "4"
+        },
+        {
+          "operator": "=",
+          "rawValue": "5",
+          "color": "#eb6774",
+          "label": "5"
+        }
+      ],
+      "foxglovePanelTitle": "蓝色数量"
+    },
+    "Indicator!2b8xvlo": {
+      "path": "/mission/blue_done.data",
+      "style": "background",
+      "fallbackColor": "#8bc1e0",
+      "fallbackLabel": "未开始",
+      "rules": [
+        {
+          "operator": "=",
+          "rawValue": "true",
+          "color": "#68e24a",
+          "label": "已入区"
+        },
+        {
+          "operator": "=",
+          "rawValue": "false",
+          "color": "#f3ae93",
+          "label": "进行中"
+        }
+      ],
+      "foxglovePanelTitle": "蓝色完成"
+    },
+    "Indicator!2vb1y0s": {
+      "path": "/mission/red_done.data",
+      "style": "background",
+      "fallbackColor": "#8bc1e0",
+      "fallbackLabel": "未开始",
+      "rules": [
+        {
+          "operator": "=",
+          "rawValue": "true",
+          "color": "#68e24a",
+          "label": "已入区"
+        },
+        {
+          "operator": "=",
+          "rawValue": "false",
+          "color": "#f3ae93",
+          "label": "进行中"
+        }
+      ],
+      "foxglovePanelTitle": "红色完成"
+    },
+    "Image!42iutju": {
+      "cameraState": {
+        "distance": 20,
+        "perspective": true,
+        "phi": 60,
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOffset": [
+          0,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "thetaOffset": 45,
+        "fovy": 45,
+        "near": 0.5,
+        "far": 5000
+      },
+      "followMode": "follow-pose",
+      "scene": {},
+      "transforms": {},
+      "topics": {},
+      "layers": {},
+      "publish": {
+        "type": "point",
+        "poseTopic": "/move_base_simple/goal",
+        "pointTopic": "/clicked_point",
+        "poseEstimateTopic": "/initialpose",
+        "poseEstimateXDeviation": 0.5,
+        "poseEstimateYDeviation": 0.5,
+        "poseEstimateThetaDeviation": 0.26179939
+      },
+      "imageMode": {
+        "imageTopicPath": "/camera/image_raw"
+      },
+      "imageTopicPath": "/camera/image_raw",
+      "foxglovePanelTitle": "识别画面"
+    },
+    "Log!37wr55x": {
+      "topicPath": "/rosout",
+      "minLevel": 1,
+      "searchTerms": "",
+      "foxglovePanelTitle": "任务日志"
+    },
+    "Indicator!2f185h3": {
+      "path": "/mission/progress.data",
+      "style": "background",
+      "fallbackColor": "#c0ecca",
+      "fallbackLabel": "等待任务",
+      "rules": [
+        {
+          "operator": "=",
+          "rawValue": "任务完成",
+          "color": "#68e24a",
+          "label": "全部完成"
+        }
+      ],
+      "foxglovePanelTitle": "任务进度"
+    },
+    "Indicator!3d51705": {
+      "path": "/mission/work_state.data",
+      "style": "background",
+      "fallbackColor": "#c0ecca",
+      "fallbackLabel": "待命",
+      "rules": [
+        {
+          "operator": "=",
+          "rawValue": "任务完成",
+          "color": "#68e24a",
+          "label": "任务完成"
+        }
+      ],
+      "foxglovePanelTitle": "当前任务"
+    },
+    "Indicator!dztld5": {
+      "path": "/mission/llm_status.data",
+      "style": "background",
+      "fallbackColor": "#c0ecca",
+      "fallbackLabel": "等待出题",
+      "rules": [
+        {
+          "operator": "=",
+          "rawValue": "解析成功: [red,1,A;blue,2,C]",
+          "color": "#68e24a",
+          "label": "解析成功"
+        }
+      ],
+      "foxglovePanelTitle": "LLM状态"
+    },
+    "Publish!2dnsmft": {
+      "buttonText": "开始任务",
+      "buttonTooltip": "向 /mission/question 发布演示题目（MOCK 模式走默认任务）",
+      "advancedView": false,
+      "topic": "/mission/question",
+      "type": "std_msgs/String",
+      "value": "{\"data\": \"需要搬运1个红色包裹到A区，2个蓝色包裹到C区\"}",
+      "foxglovePanelTitle": "开始按钮"
+    },
+    "3D!274x6jb": {
+      "cameraState": {
+        "perspective": false,
+        "distance": 40.0,
+        "phi": 0.0,
+        "thetaOffset": 0.0,
+        "targetOffset": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "target": [
+          -0.5,
+          -5.0,
+          0.0
+        ],
+        "targetOrientation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "fovy": 45,
+        "near": 0.5,
+        "far": 5000
+      },
+      "followMode": "follow-pose",
+      "scene": {},
+      "transforms": {},
+      "topics": {
+        "/plan": {
+          "visible": true
+        },
+        "/local_plan": {
+          "visible": true
+        },
+        "/global_costmap/footprint": {
+          "visible": true
+        },
+        "/scan": {
+          "visible": true
+        },
+        "/map": {
+          "visible": true
+        },
+        "/map_volatile": {
+          "visible": true
+        }
+      },
+      "layers": {},
+      "publish": {
+        "type": "point",
+        "poseTopic": "/move_base_simple/goal",
+        "pointTopic": "/clicked_point",
+        "poseEstimateTopic": "/initialpose",
+        "poseEstimateXDeviation": 0.5,
+        "poseEstimateYDeviation": 0.5,
+        "poseEstimateThetaDeviation": 0.26179939
+      },
+      "imageMode": {}
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "layout": {
+    "first": "Tab!u7p6y3",
+    "second": {
+      "first": {
+        "first": "Indicator!2h77mwf",
+        "second": {
+          "first": "Indicator!3e09x78",
+          "second": {
+            "first": "Indicator!2b8xvlo",
+            "second": "Indicator!2vb1y0s",
+            "direction": "row",
+            "splitPercentage": 47.727742319718594
+          },
+          "direction": "row",
+          "splitPercentage": 27.981651376146786
+        },
+        "direction": "row",
+        "splitPercentage": 21.621275894425924
+      },
+      "second": {
+        "first": {
+          "first": {
+            "first": "Image!42iutju",
+            "second": "Log!37wr55x",
+            "direction": "row"
+          },
+          "second": "3D!274x6jb",
+          "direction": "column",
+          "splitPercentage": 42.49752952236589
+        },
+        "second": {
+          "first": "Indicator!2f185h3",
+          "second": {
+            "first": "Indicator!3d51705",
+            "second": {
+              "first": "Indicator!dztld5",
+              "second": "Publish!2dnsmft",
+              "direction": "column"
+            },
+            "direction": "column",
+            "splitPercentage": 36.202736024514984
+          },
+          "direction": "column",
+          "splitPercentage": 24.953530183045896
+        },
+        "direction": "row",
+        "splitPercentage": 70.34361409862028
+      },
+      "direction": "column",
+      "splitPercentage": 17.042135573099635
+    },
+    "direction": "column",
+    "splitPercentage": 16.534391534391535
+  }
+}
