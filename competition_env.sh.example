@@ -1,0 +1,6 @@
+﻿# 复制本文件为 ~/competition_env.sh 并填入你自己的 API Key
+# 获取地址: https://platform.deepseek.com/
+export DEEPSEEK_API_KEY=sk-你的key
+
+# FastDDS UDP 配置（VM 内路径按需调整）
+export FASTRTPS_DEFAULT_PROFILES_FILE=$HOME/fastdds_udp.xml

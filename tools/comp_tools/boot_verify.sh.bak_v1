@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# 启动自检：等待并验证关键节点/话题/机器人状态；失败时提示重启。
+# 用法: bash ~/comp_tools/boot_verify.sh [最大等待秒数，默认180]
+MAX_WAIT="${1:-180}"
+t0=$(date +%s)
+pass() { echo "[VERIFY][OK] $1"; }
+fail() { echo "[VERIFY][FAIL] $1"; }
+
+source /opt/ros/humble/setup.bash 2>/dev/null
+while true; do
+    ok=1
+    # 1. gzserver 进程
+    if pgrep -f 'gz[s]erver' >/dev/null; then pass "gzserver 运行中"; else ok=0; fail "gzserver 未运行"; fi
+    # 2. 关键节点
+    NODES=$(timeout 12 ros2 node list 2>/dev/null)
+    for n in amcl bt_navigator planner_server controller_server mission_node llm_parser; do
+        if echo "$NODES" | grep -q "^/$n$"; then pass "节点 /$n 在线"; else ok=0; fail "节点 /$n 缺失"; fi
+    done
+    # 3. /scan 恰好 1 个发布者（防双重 spawn）
+    NPUB=$(timeout 12 ros2 topic info /scan 2>/dev/null | grep -o 'Publisher count: [0-9]*' | grep -o '[0-9]*$')
+    if [ "${NPUB:-0}" = "1" ]; then pass "/scan 发布者=1"; else ok=0; fail "/scan 发布者=${NPUB:-无}（应为1）"; fi
+    # 4. 机器人本体完好：odom 必须在出生点附近且贴地（防出生瞬间被弹飞）
+    ODOM=$(timeout 12 ros2 topic echo /odom --once --field pose.pose.position 2>/dev/null)
+    OX=$(echo "$ODOM" | awk '/^x:/{print $2}')
+    OY=$(echo "$ODOM" | awk '/^y:/{print $2}')
+    OZ=$(echo "$ODOM" | awk '/^z:/{print $2}')
+    if [ -n "$OX" ] && [ -n "$OY" ] && [ -n "$OZ" ]; then
+        MAG=$(python3 -c "import math;print(math.hypot($OX,$OY))" 2>/dev/null)
+        PASSZ=$(python3 -c "print($OZ < 0.5)" 2>/dev/null)
+        if python3 -c "exit(0 if float('$MAG') < 2.0 else 1)" 2>/dev/null && [ "$PASSZ" = "True" ]; then
+            pass "机器人本体完好 (odom=$OX,$OY,$OZ)"
+        else
+            ok=0; fail "机器人异常弹飞 (odom=$OX,$OY,$OZ)，需要重启"
+        fi
+    else
+        ok=0; fail "/odom 无数据"
+    fi
+    # 5. AMCL 定位（未定位则补发 /initialpose；要求与里程计一致才算收敛——
+    # 起步阶段的 AMCL 混乱曾烧掉整个回合预算，必须带一致门放行）
+    AMPUB=$(timeout 12 ros2 topic info /amcl_pose 2>/dev/null | grep -o 'Publisher count: [0-9]*' | grep -o '[0-9]*$')
+    OP=$(timeout 8 ros2 topic echo /odom --once --field pose.pose.position 2>/dev/null)
+    OX=$(echo "$OP" | awk '/^x:/{print $2}')
+    OY=$(echo "$OP" | awk '/^y:/{print $2}')
+    if [ "${AMPUB:-0}" -ge 1 ] 2>/dev/null; then
+        AP=$(timeout 12 ros2 topic echo /amcl_pose --once --field pose.pose.position 2>/dev/null)
+        AX=$(echo "$AP" | awk '/^x:/{print $2}')
+        AY=$(echo "$AP" | awk '/^y:/{print $2}')
+        DIFF=$(python3 -c "import math; print(round(math.hypot(($AX or 0)-($OX or 0), ($AY or 0)-($OY or 0)),2))" 2>/dev/null)
+        if [ -n "$AX" ] && python3 -c "exit(0 if abs($AX) < 25 and abs($AY) < 25 else 1)" 2>/dev/null \
+           && python3 -c "exit(0 if (${DIFF:-99}) < 1.0 else 1)" 2>/dev/null; then
+            pass "AMCL 已定位且与里程计一致 ($AX, $AY, 偏差${DIFF}m)"
+        elif [ -n "$AX" ] && python3 -c "exit(0 if abs($AX) < 25 and abs($AY) < 25 else 1)" 2>/dev/null; then
+            ok=0; fail "AMCL 与里程计偏差 ${DIFF}m，重发 /initialpose"
+            timeout 12 ros2 topic pub -t 3 /initialpose geometry_msgs/msg/PoseWithCovarianceStamped \
+                '{header: {frame_id: map}, pose: {pose: {position: {x: 0.0, y: 0.0}, orientation: {w: 1.0}}}}' >/dev/null 2>&1
+        elif [ -n "$AX" ]; then
+            ok=0; fail "AMCL 位姿离谱 ($AX, $AY)，重发 /initialpose"
+            timeout 12 ros2 topic pub -t 3 /initialpose geometry_msgs/msg/PoseWithCovarianceStamped \
+                '{header: {frame_id: map}, pose: {pose: {position: {x: 0.0, y: 0.0}, orientation: {w: 1.0}}}}' >/dev/null 2>&1
+        else
+            ok=0; fail "AMCL 未发布，重发 /initialpose"
+            timeout 12 ros2 topic pub -t 3 /initialpose geometry_msgs/msg/PoseWithCovarianceStamped \
+                '{header: {frame_id: map}, pose: {pose: {position: {x: 0.0, y: 0.0}, orientation: {w: 1.0}}}}' >/dev/null 2>&1
+        fi
+    else
+        ok=0; fail "AMCL 未发布 /amcl_pose"
+    fi
+    if [ "$ok" = "1" ]; then
+        echo "[VERIFY] 全部通过，用时 $(( $(date +%s) - t0 ))s"
+        exit 0
+    fi
+    if [ $(( $(date +%s) - t0 )) -ge "$MAX_WAIT" ]; then
+        echo "[VERIFY] 超时 $MAX_WAIT s，仍有失败项"
+        exit 1
+    fi
+    sleep 5
+done

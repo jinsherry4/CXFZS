@@ -1,0 +1,8 @@
+#!/bin/bash
+# 重启全链路(MOCK 模式)：清场 → 无头启动。用法: bash ~/comp_tools/boot_mock.sh
+bash ~/comp_stop.sh
+sleep 1
+export MISSION_MOCK=1 GAZEBO_HEADLESS=1
+export MISSION_ROUND_SEC=420   # MOCK 验证模式放宽到 420s,正式比赛默认 280s
+nohup bash ~/start_all.sh > ~/comp_logs/start_all.log 2>&1 &
+echo BOOTING

@@ -1,0 +1,70 @@
+<?xml version="1.0"?>
+<robot name="six_arm" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+    <xacro:include filename="$(find mybot_description)/urdf/large_base.xacro" />
+
+    <!-- Transmission is important to link the joints and the controller -->
+    <xacro:macro name="wheel_transmission" params="prefix">
+        <transmission name="${prefix}_wheel_joint_trans">
+            <type>transmission_interface/SimpleTransmission</type>
+            <joint name="${prefix}_wheel_joint">
+                <hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface>
+            </joint>
+            <actuator name="${prefix}_wheel_joint_motor">
+                <hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface>
+                <mechanicalReduction>1</mechanicalReduction>
+            </actuator>
+        </transmission>
+
+        <gazebo reference="${prefix}_wheel_link">
+            <material>Gazebo/Gray</material>
+            <mu1>1.5</mu1>
+            <kp>2e5</kp>
+            <kd>100</kd>
+            <minDepth>0.01</minDepth>
+            <maxVel>0.0</maxVel>
+            <mu2>1.5</mu2>
+        </gazebo>
+    </xacro:macro>
+
+    <!-- /////////////////////////////////   Gazebo   ////////////////////////////////////// -->
+    <gazebo reference="base_footprint">
+        <turnGravityOff>false</turnGravityOff>
+    </gazebo>
+    <gazebo reference="base_link">
+        <material>Gazebo/Blue</material>
+        <kp>2e5</kp>
+        <kd>100</kd>
+        <minDepth>0.01</minDepth>
+        <maxVel>0.0</maxVel>
+    </gazebo>
+
+    <gazebo reference="back_caster_link">
+        <material>Gazebo/Black</material>
+        <kp>2e5</kp>
+        <kd>100</kd>
+        <minDepth>0.01</minDepth>
+        <maxVel>0.0</maxVel>
+        <!-- 固定关节球轮必须零摩擦：高摩擦球卡地旋转时会把底盘顶起飞 -->
+        <mu1>0.0</mu1>
+        <mu2>0.0</mu2>
+    </gazebo>
+
+    <xacro:wheel_transmission prefix="left" />
+    <xacro:wheel_transmission prefix="right" />
+
+
+    <!-- controller -->
+    <gazebo>
+        <plugin name="robot_planar_move" filename="libgazebo_ros_planar_move.so">
+            <!-- 运动学底盘：每周期覆写速度，免疫弹飞/冻结/打滑。
+                 里程计与 TF 由 truth_odom.py 节点从世界真值发布（此插件内置
+                 里程计在被阻挡时会积分假位移，故关闭）。 -->
+            <update_rate>500.0</update_rate>
+            <publish_rate>30.0</publish_rate>
+            <ros><namespace>/</namespace></ros>
+            <publish_odom>false</publish_odom>
+            <publish_odom_tf>false</publish_odom_tf>
+        </plugin>
+    </gazebo>
+</robot>
