@@ -1808,7 +1808,7 @@
     </plugin>
 </model>
     <model name='red_cube_3'>
-      <pose>-9.000 3.500 0.015 0 0 0</pose>
+      <pose>-9.000 3.250 0.015 0 0 0</pose>
       <link name='link'>
         <gravity>0</gravity>
         <inertial>
@@ -2081,7 +2081,7 @@
     </plugin>
 </model>
     <model name='blue_cube_5'>
-      <pose>-8.000 -3.750 0.015 0 0 0</pose>
+      <pose>-8.000 -5.000 0.015 0 0 0</pose>
       <link name='link'>
         <gravity>0</gravity>
         <inertial>
@@ -2454,7 +2454,7 @@
 
     <gui fullscreen='0'>
       <camera name='user_camera'>
-        <pose>-6.4487 -19.2949 53.1041 0 1.2778 1.5514</pose>
+        <pose>-8.0 -6.8 1.8 0 0.7854 1.5708</pose>
         <view_controller>orbit</view_controller>
         <projection_type>perspective</projection_type>
       </camera>
