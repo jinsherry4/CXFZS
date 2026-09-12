@@ -11,6 +11,7 @@
 #      truth_odom + loc_shim 承担），reset 后 re-bringup 全链可成功，自愈闭环。
 #   2. 固定 sleep 40 改为健康门：等 map_server 激活 + /map 真实尺寸（≥400 宽，
 #      真图 658，空图默认 100）双条件，再放行定位垫片与任务链。
+#   3. (2026-09-12) gzserver 检测改为循环重试(最多40s)+节点就绪确认，修复 VM 资源紧张时误报退出。
 # 用法: bash ~/start_all.sh
 set +u
 export PYTHONUNBUFFERED=1   # nohup 重定向下日志实时可见
@@ -20,8 +21,6 @@ source ~/competition_env.sh 2>/dev/null || true   # 可放 export DEEPSEEK_API_K
 source /opt/ros/humble/setup.bash
 source ~/dev_ws/install/setup.bash
 if [ "${GAZEBO_HEADLESS:-0}" = "1" ]; then
-  # 无桌面环境仍需 GL 上下文（摄像头传感器必需，否则 Rendering is disabled）。
-  # 优先真 Xorg：vmwgfx→SVGA3D 硬件渲染走宿主GPU；Xvfb 的 GLX 只有 llvmpipe 软渲染，会吃满 2 个 vCPU。
   if ! DISPLAY=:0 timeout 8 glxinfo -B 2>/dev/null | grep -q SVGA3D; then
     ( nohup sudo -n Xorg :0 -noreset > /dev/null 2>&1 ) &
     sleep 5
@@ -29,14 +28,13 @@ if [ "${GAZEBO_HEADLESS:-0}" = "1" ]; then
   if DISPLAY=:0 timeout 8 glxinfo -B 2>/dev/null | grep -q SVGA3D; then
     export DISPLAY=:0
   else
-    # Xorg 起不来（无3D/驱动缺失）才退回 Xvfb 软渲染
     if ! pgrep -x Xvfb > /dev/null; then
       ( nohup Xvfb :99 -screen 0 1280x1024x24 > /dev/null 2>&1 ) &
       sleep 2
     fi
     export DISPLAY=:99
   fi
-  export RVIZ_ENABLE=0   # RViz 软件渲染吃掉大量 CPU，无头模式跳过
+  export RVIZ_ENABLE=0
 else
   export DISPLAY=${DISPLAY:-:0}
 fi
@@ -44,9 +42,6 @@ export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
 
 if [ "${SKIP_GAZEBO:-0}" != "1" ]; then
 echo '[1/6] 关闭残留仿真与任务链进程(全量)...'
-# 2026-09-07 round2 教训：只杀 gazebo 不杀任务链 → 双 mission_node 竞争；
-# 旧 gzserver 未死透 → 新实例 bind 失败死亡 → 机器人/方块停在上一轮位置，
-# 整轮在污染世界里执行。因此：全量杀 + 端口释放确认。
 pkill -f 'ros2 [l]aunch' 2>/dev/null; sleep 1
 pkill -f 'gz[s]erver' 2>/dev/null; pkill -f 'gz[c]lient' 2>/dev/null; pkill -f '[r]viz2' 2>/dev/null
 pkill -f '[m]ission_node' 2>/dev/null; pkill -f '[l]lm_parser' 2>/dev/null; pkill -f '[o]bstacle_mover' 2>/dev/null
@@ -55,11 +50,8 @@ pkill -f '[t]ruth_odom' 2>/dev/null; pkill -f '[l]oc_shim' 2>/dev/null
 pkill -f '[r]osbridge' 2>/dev/null; pkill -f '[r]osapi' 2>/dev/null
 pkill -f '[c]omponent_container' 2>/dev/null; pkill -f '[r]obot_state_publisher' 2>/dev/null; pkill -f '[s]pawner' 2>/dev/null
 sleep 1
-# r10 复盘：rosbridge SIGTERM 后偶发不死（busy loop），r7-r10 实测每轮
-# 残留一个实例累积吃 CPU（最多 4 个并存）。-9 补刀。
 pkill -9 -f '[r]osbridge' 2>/dev/null; pkill -9 -f '[r]osapi' 2>/dev/null
 sleep 2
-# SIGTERM 后最多等 6s 让 gzserver 优雅退出（保存世界/断开传输），未退则 -9
 for i in 1 2 3 4 5 6; do pgrep -f 'gz[s]erver' >/dev/null || break; sleep 1; done
 pkill -9 -f 'gz[s]erver' 2>/dev/null
 for i in 1 2 3 4 5; do pgrep -f 'gz[s]erver' >/dev/null || break; sleep 1; done
@@ -67,10 +59,25 @@ sleep 1
 
 echo '[2/6] 启动 Gazebo(新地图)+机械臂控制器...'
 nohup ros2 launch mybot gazebo_world2.launch.py > ~/comp_logs/gazebo.log 2>&1 &
-sleep 20
-# 新实例存活确认：bind 失败(端口被占)会在几秒内 process has died
-if ! pgrep -f 'gz[s]erver' >/dev/null; then
-  echo '  错误: gzserver 未存活——疑似 Gazebo master 端口被占，见 ~/comp_logs/gazebo.log'; exit 1
+# 循环检测 gzserver 存活 + gazebo_ros 节点就绪（最多 40s，避免 VM 资源紧张时误报）
+GZ_OK=0
+for gi in $(seq 1 14); do
+  sleep 3
+  if pgrep -f 'gz[s]erver' >/dev/null; then
+    if timeout 5 ros2 node list 2>/dev/null | grep -qi 'gazebo'; then
+      GZ_OK=1; break
+    fi
+  fi
+  if ! pgrep -f 'gz[s]erver' >/dev/null && [ $gi -ge 3 ]; then
+    echo '  错误: gzserver 未存活——疑似 Gazebo master 端口被占，见 ~/comp_logs/gazebo.log'; exit 1
+  fi
+done
+if [ "$GZ_OK" != "1" ]; then
+  if pgrep -f 'gz[s]erver' >/dev/null; then
+    echo '  警告: gazebo_ros 节点检测超时，但 gzserver 进程存活，继续'
+  else
+    echo '  错误: gzserver 未存活——疑似 Gazebo master 端口被占，见 ~/comp_logs/gazebo.log'; exit 1
+  fi
 fi
 GZCNT=$(pgrep -f 'gz[s]erver' | wc -l)
 echo "  gzserver 存活 x${GZCNT} (应=1)"
@@ -86,7 +93,6 @@ MAP_OK=0; ST=''; MW=''
 for i in $(seq 1 45); do
   ST=$(timeout 6 ros2 lifecycle get /map_server 2>/dev/null | tail -1)
   if echo "$ST" | grep -q active; then
-    # transient_local 探针读 latched /map 宽度（echo 无 --qos 参数，用 rclpy）
     MW=$(timeout 10 python3 -c "
 import rclpy
 from rclpy.node import Node
@@ -116,7 +122,6 @@ fi
 ( nohup python3 ~/truth_odom.py > /tmp/truth_odom.log 2>&1 ) &
 ( nohup python3 ~/loc_shim.py > /tmp/loc_shim.log 2>&1 ) &
 sleep 3
-# 出生点校验：非全新世界（机器人停在上一轮终点）会让整轮任务在错误前提执行
 OX=''; OY=''
 for oi in 1 2 3; do
   OX=$(timeout 8 ros2 topic echo /odom --once --field pose.pose.position.x 2>/dev/null | grep -oE '^-?[0-9.e-]+$' | head -1)
