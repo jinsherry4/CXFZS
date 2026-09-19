@@ -34,22 +34,40 @@ def _num_from(text, default=1):
 
 
 def rule_parse(text):
-    """离线兜底解析：提取 (color, count, zone)。"""
+    """离线兜底解析：按文本出现顺序提取 (color, count, zone)。
+
+    兼容两种语序："1个红"（数量在前）与 "红色1个"（颜色在前），
+    按匹配位置排序后与提取到的区域顺序一一配比。
+    """
     t = text.replace(' ', '').lower()
-    items = []
-    for color in ['红', 'red', '蓝', 'blue']:
-        cn = 'red' if color in ('红', 'red') else 'blue'
-        for m in re.finditer(
-                rf'({color})[^A-Za-z0-9]{{0,6}}?([x×*]?\d+|[零一二两三四五六七八九十])',
-                t):
-            items.append({'color': cn, 'count': _num_from(m.group(2), 1),
-                          'zone': None})
-        for m in re.finditer(
-                rf'([x×*]?\d+|[零一二两三四五六七八九十])[个只块件]{{0,1}}{color}', t):
-            items.append({'color': cn, 'count': _num_from(m.group(1), 1),
-                          'zone': None})
-    if not items:
+    picked = []  # (pos, color, count)
+    # 数量在前：1个红 / 2块蓝
+    for m in re.finditer(
+            r'([x×*]?\d+|[零一二两三四五六七八九十])(个|只|块|件)?(红|蓝|red|blue)',
+            t):
+        picked.append((m.start(),
+                       'red' if m.group(3) in ('红', 'red') else 'blue',
+                       _num_from(m.group(1), 1)))
+    # 颜色在前：红色1个 / 蓝的2只（跳过与前类重叠的"红...1"模式段）
+    for m in re.finditer(
+            r'(红|蓝|red|blue)[^A-Za-z0-9]{0,6}?([x×*]?\d+|[零一二两三四五六七八九十])',
+            t):
+        color = m.group(1)
+        if color in ('红', 'red'):
+            color = 'red'
+        else:
+            color = 'blue'
+        picked.append((m.start(), color, _num_from(m.group(2), 1)))
+    if not picked:
         return None
+    # 同一位置附近去重（如 "红色1个" 两条规则都命中同一文本段）
+    picked.sort(key=lambda x: x[0])
+    merged = []
+    for pos, color, count in picked:
+        if merged and pos - merged[-1][0] < 4:
+            continue
+        merged.append((pos, color, count))
+    items = [{'color': c, 'count': n, 'zone': None} for _, c, n in merged]
     zones_in_text = [z.upper() for z in
                      re.findall(r'[到放去至into]+\s*([abc])\s*区?', t)]
     for i, it in enumerate(items):
