@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>大模型技术创新赛 · 任务指挥面板</title>
+<title>大模型技术创新赛 · 裁判指挥面板 V2</title>
 <script src="roslib.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -11,116 +11,127 @@
     height: 100vh; display: flex; flex-direction: column; overflow: hidden;
   }
   header {
-    display: flex; align-items: center; gap: 16px; padding: 10px 20px;
+    display: flex; align-items: center; gap: 14px; padding: 8px 18px;
     background: #111827; border-bottom: 1px solid #1f2b3d;
   }
-  header h1 { font-size: 20px; color: #f8fafc; font-weight: 600; }
-  #conn {
-    padding: 3px 12px; border-radius: 12px; font-size: 13px;
-    background: #7f1d1d; color: #fecaca;
-  }
+  header h1 { font-size: 18px; color: #f8fafc; font-weight: 600; }
+  #conn { padding: 3px 12px; border-radius: 12px; font-size: 13px; background: #7f1d1d; color: #fecaca; }
   #conn.ok { background: #14532d; color: #bbf7d0; }
   #simtime { margin-left: auto; font-size: 13px; color: #64748b; }
   main {
-    flex: 1; display: grid; grid-template-columns: 330px 1fr 300px;
-    gap: 12px; padding: 12px; min-height: 0;
+    flex: 1; display: grid; grid-template-columns: 300px 1fr 1fr;
+    gap: 10px; padding: 10px; min-height: 0;
   }
+  .col { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
   .panel {
     background: #111827; border: 1px solid #1f2b3d; border-radius: 10px;
-    padding: 12px; display: flex; flex-direction: column; min-height: 0;
+    padding: 10px; display: flex; flex-direction: column; min-height: 0;
   }
-  .panel h2 {
-    font-size: 14px; color: #7dd3fc; margin-bottom: 8px; font-weight: 600;
-    letter-spacing: 1px;
+  .panel h2 { font-size: 13px; color: #7dd3fc; margin-bottom: 6px; font-weight: 600; letter-spacing: 1px; }
+  /* ① 裁判输入 */
+  #refInput {
+    width: 100%; background: #0b0f16; color: #f1f5f9; border: 1px solid #334155;
+    border-radius: 8px; padding: 9px 12px; font-size: 14px; outline: none;
   }
-  #question {
-    font-size: 13px; line-height: 1.7; color: #cbd5e1; white-space: pre-wrap;
-    overflow-y: auto; flex: 1; background: #0b0f16; border-radius: 6px; padding: 8px;
+  #refInput:focus { border-color: #f59e0b; }
+  #refSend {
+    margin-top: 6px; width: 100%; padding: 8px; border: none; border-radius: 8px;
+    background: #d97706; color: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
   }
-  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-  .chip {
-    padding: 4px 10px; border-radius: 6px; font-size: 13px; font-weight: 600;
+  #refSend:hover { background: #f59e0b; }
+  #refSend:disabled { background: #475569; cursor: wait; }
+  .refHint { font-size: 11px; color: #64748b; margin-top: 5px; line-height: 1.5; }
+  #refAck {
+    margin-top: 6px; font-size: 12px; line-height: 1.6; max-height: 88px; overflow-y: auto;
+    background: #0b0f16; border-radius: 6px; padding: 6px;
   }
+  #refAck .ok { color: #4ade80; }
+  #refAck .bad { color: #f87171; }
+  /* 任务信息（评分项2） */
+  #question { font-size: 13px; line-height: 1.6; color: #cbd5e1; white-space: pre-wrap;
+    overflow-y: auto; flex: 1; background: #0b0f16; border-radius: 6px; padding: 8px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+  .chip { padding: 3px 9px; border-radius: 6px; font-size: 13px; font-weight: 600; }
   .chip.red  { background: #450a0a; color: #fca5a5; border: 1px solid #7f1d1d; }
   .chip.blue { background: #172554; color: #93c5fd; border: 1px solid #1e3a8a; }
-  #sequence { margin-top: 10px; font-size: 13px; color: #fbbf24; }
+  #sequence { margin-top: 6px; font-size: 12px; color: #fbbf24; }
+  /* ② 地图（2D 俯视，轻量） */
   #mapwrap { flex: 1; position: relative; min-height: 0; }
   canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
-  #camimg {
-    width: 100%; border-radius: 6px; background: #000; aspect-ratio: 4/3; object-fit: cover;
-  }
-  #workstate {
-    font-size: 18px; font-weight: 700; color: #4ade80; min-height: 28px;
-    padding: 8px; background: #0b0f16; border-radius: 6px;
-  }
-  .bar { margin: 10px 0; }
-  .bar .label { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 4px; }
-  .bar .track { height: 10px; background: #0b0f16; border-radius: 5px; overflow: hidden; }
+  /* ③ 摄像头（大画面） */
+  #camimg { width: 100%; border-radius: 6px; background: #000; flex: 1; min-height: 0;
+    object-fit: contain; }
+  #camOverlay { font-size: 11px; color: #64748b; margin-top: 4px; }
+  /* 状态 */
+  #workstate { font-size: 16px; font-weight: 700; color: #4ade80; min-height: 26px;
+    padding: 7px; background: #0b0f16; border-radius: 6px; }
+  .bar { margin: 8px 0; }
+  .bar .label { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 3px; }
+  .bar .track { height: 9px; background: #0b0f16; border-radius: 5px; overflow: hidden; }
   .bar .fill { height: 100%; width: 0%; transition: width .4s; }
   #redfill { background: #ef4444; }
   #bluefill { background: #3b82f6; }
-  #log {
-    flex: 1; overflow-y: auto; font-size: 12px; line-height: 1.6;
-    background: #0b0f16; border-radius: 6px; padding: 8px; color: #94a3b8;
-  }
-  #log div:last-child { color: #4ade80; }
-  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
-  .stat {
-    background: #0b0f16; border-radius: 6px; padding: 8px; text-align: center;
-  }
-  .stat .v { font-size: 22px; font-weight: 700; color: #f8fafc; }
-  .stat .k { font-size: 11px; color: #64748b; margin-top: 2px; }
-  footer {
-    padding: 6px 20px; font-size: 12px; color: #475569;
-    border-top: 1px solid #1f2b3d; background: #111827;
-  }
+  #log { flex: 1; overflow-y: auto; font-size: 11px; line-height: 1.55;
+    background: #0b0f16; border-radius: 6px; padding: 6px; color: #94a3b8; }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 8px; }
+  .stat { background: #0b0f16; border-radius: 6px; padding: 6px; text-align: center; }
+  .stat .v { font-size: 18px; font-weight: 700; color: #f8fafc; }
+  .stat .k { font-size: 10px; color: #64748b; }
+  footer { padding: 4px 18px; font-size: 11px; color: #475569; border-top: 1px solid #1f2b3d; background: #111827; }
 </style>
 </head>
 <body>
 <header>
-  <h1>大模型技术创新赛 · 任务指挥面板</h1>
+  <h1>大模型技术创新赛 · 裁判指挥面板</h1>
   <span id="conn">未连接</span>
-  <span id="simtime">仿真时间: --</span>
+  <span id="simtime"></span>
 </header>
 <main>
-  <div style="display:flex;flex-direction:column;gap:12px;min-height:0;">
-    <div class="panel" style="flex:2;">
-      <h2>出题 / 大模型解析</h2>
-      <div id="question">等待出题程序发布题目…</div>
-    </div>
+  <!-- 左列：裁判输入 + 任务信息（评分项2） -->
+  <div class="col">
     <div class="panel">
-      <h2>结构化指令</h2>
-      <div class="chips" id="chips"><span style="color:#475569;font-size:13px">--</span></div>
-      <div id="sequence">顺序: --</div>
+      <h2>裁判发布任务</h2>
+      <input id="refInput" placeholder="例：搬运2个红色包裹到A区" />
+      <button id="refSend">发布任务（大模型解析）</button>
+      <div id="refAck"></div>
+      <div class="refHint">支持句式："搬运N个红色包裹到X区" / "N个蓝色方块去X区"。<br>解析由大模型完成，结果在"任务信息"栏显示。</div>
     </div>
     <div class="panel" style="flex:1;">
-      <h2>识别画面 (RGBD)</h2>
-      <img id="camimg" alt="camera">
+      <h2>任务信息（题目 / 抓取顺序 / 数量）</h2>
+      <div id="question">等待裁判发布任务…</div>
+      <div class="chips" id="chips"></div>
+      <div id="sequence"></div>
     </div>
   </div>
-  <div class="panel">
-    <h2>SLAM 地图 / 机器人位姿 / 规划路径</h2>
-    <div id="mapwrap"><canvas id="mapcv"></canvas></div>
+  <!-- 中列：地图 + 摄像头（评分项6） -->
+  <div class="col">
+    <div class="panel" style="flex:1.1;">
+      <h2>SLAM 地图 · 机器人位姿 · 导航路径</h2>
+      <div id="mapwrap"><canvas id="mapcv"></canvas></div>
+    </div>
+    <div class="panel" style="flex:1;">
+      <h2>车载摄像头（识别视角）</h2>
+      <img id="camimg" alt="camera">
+      <div id="camOverlay">RGBD 5fps · 用于红蓝方块视觉识别</div>
+    </div>
   </div>
-  <div style="display:flex;flex-direction:column;gap:12px;min-height:0;">
+  <!-- 右列：状态 + 进度 + 日志（评分项6） -->
+  <div class="col">
     <div class="panel">
-      <h2>当前工作状态</h2>
+      <h2>工作状态</h2>
       <div id="workstate">待机</div>
       <div class="stats">
         <div class="stat"><div class="v" id="stt">--:--</div><div class="k">任务用时</div></div>
-        <div class="stat"><div class="v" id="stg">0</div><div class="k">已抓取</div></div>
+        <div class="stat"><div class="v" id="str">0</div><div class="k">红已放</div></div>
+        <div class="stat"><div class="v" id="stb">0</div><div class="k">蓝已放</div></div>
       </div>
     </div>
     <div class="panel">
       <h2>货物进度</h2>
-      <div class="bar">
-        <div class="label"><span>红色</span><span id="redtxt">0 / 0</span></div>
-        <div class="track"><div class="fill" id="redfill"></div></div>
-      </div>
-      <div class="bar">
-        <div class="label"><span>蓝色</span><span id="bluetxt">0 / 0</span></div>
-        <div class="track"><div class="fill" id="bluefill"></div></div>
-      </div>
+      <div class="bar"><div class="label"><span>红色</span><span id="redtxt">0 / 0</span></div>
+        <div class="track"><div class="fill" id="redfill"></div></div></div>
+      <div class="bar"><div class="label"><span>蓝色</span><span id="bluetxt">0 / 0</span></div>
+        <div class="track"><div class="fill" id="bluefill"></div></div></div>
     </div>
     <div class="panel" style="flex:1;">
       <h2>状态日志</h2>
@@ -128,13 +139,13 @@
     </div>
   </div>
 </main>
-<footer>rosbridge: ws://192.168.30.131:9090 · 面板: http://192.168.30.131:8080/dashboard.html · 订阅 /mission/* /map /amcl_pose /plan</footer>
+<footer>rosbridge ws://192.168.30.131:9090 · 面板 http://192.168.30.131:8080/dashboard.html · 订阅 /mission/* /map /plan /camera/image_raw</footer>
 
 <script>
 const VM = location.hostname || '192.168.30.131';
-let ros = null, connected = false;
+let ros = null;
 let mapData = null, robotPose = null, planPath = null;
-let t0Task = null, grabbed = 0;
+let t0Task = null, redPlaced = 0, bluePlaced = 0;
 
 function logLine(s) {
   const el = document.getElementById('log');
@@ -142,43 +153,76 @@ function logLine(s) {
   const t = new Date().toLocaleTimeString('zh-CN', {hour12: false});
   d.textContent = `[${t}] ${s}`;
   el.appendChild(d);
-  while (el.childElementCount > 200) el.removeChild(el.firstChild);
+  while (el.childElementCount > 150) el.removeChild(el.firstChild);
   el.scrollTop = el.scrollHeight;
 }
 
 function connect() {
   ros = new ROSLIB.Ros({ url: `ws://${VM}:9090` });
   ros.on('connection', () => {
-    connected = true;
     const c = document.getElementById('conn');
-    c.textContent = '已连接 rosbridge'; c.classList.add('ok');
+    c.textContent = '已连接'; c.classList.add('ok');
     logLine('rosbridge 已连接');
     subscribeAll();
   });
   ros.on('error', () => { document.getElementById('conn').textContent = '连接失败'; });
   ros.on('close', () => {
-    connected = false;
     const c = document.getElementById('conn');
     c.textContent = '断开，重连中…'; c.classList.remove('ok');
     setTimeout(connect, 3000);
   });
 }
 
-let subs = [];
 function mk(name, type, cb, rate) {
   const t = new ROSLIB.Topic({ ros, name, type, throttle_rate: rate || 0 });
   t.subscribe(cb);
-  subs.push(t);
-  return t;
 }
 
+let subsDone = false;
 function subscribeAll() {
+  if (subsDone) return;
+  subsDone = true;
+
+  // ---------- 裁判输入 ----------
+  const btn = document.getElementById('refSend');
+  const inp = document.getElementById('refInput');
+  function sendTask() {
+    const text = inp.value.trim();
+    if (!text) return;
+    const t = new ROSLIB.Topic({ ros, name: '/referee/text', type: 'std_msgs/String' });
+    t.publish(new ROSLIB.Message({ data: text }));
+    // 本地预发一次回执占位
+    ackLine('pending', `已提交: ${text}`);
+    btn.disabled = true;
+    setTimeout(() => { btn.disabled = false; }, 4000);
+  }
+  btn.onclick = sendTask;
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') sendTask(); });
+
+  function ackLine(kind, text) {
+    const el = document.getElementById('refAck');
+    const d = document.createElement('div');
+    d.className = kind === 'ok' ? 'ok' : (kind === 'bad' ? 'bad' : '');
+    const t = new Date().toLocaleTimeString('zh-CN', {hour12: false});
+    d.textContent = `[${t}] ${text}`;
+    el.appendChild(d);
+    while (el.childElementCount > 12) el.removeChild(el.firstChild);
+  }
+
+  mk('/referee/ack', 'std_msgs/String', m => {
+    try {
+      const d = JSON.parse(m.data);
+      ackLine(d.ok ? 'ok' : 'bad', d.detail);
+    } catch (e) { ackLine('', m.data); }
+  });
+
+  // ---------- 任务信息（评分项2） ----------
   mk('/mission/question', 'std_msgs/String', m => {
-    // llm_parser 收到题目后 /mission/task_info 会带出题目与解析
     document.getElementById('question').textContent = m.data;
     t0Task = Date.now();
-    logLine('收到题目');
-  });
+    redPlaced = bluePlaced = 0;
+    logLine('收到任务题目');
+  }, 200);
 
   mk('/mission/task_info', 'std_msgs/String', m => {
     try {
@@ -192,15 +236,17 @@ function subscribeAll() {
         s.textContent = `${it.color === 'red' ? '红色' : '蓝色'}×${it.count} → ${it.zone}区`;
         ch.appendChild(s);
       });
-      document.getElementById('sequence').textContent = '顺序: ' + (d.sequence || '--');
-      logLine('解析: ' + (d.sequence || ''));
-    } catch (e) { logLine('task_info 解析失败'); }
-  });
+      document.getElementById('sequence').textContent = '大模型抓取顺序: ' + (d.sequence || '--');
+      logLine('大模型解析: ' + (d.sequence || ''));
+    } catch (e) {}
+  }, 200);
 
+  // ---------- 状态（评分项6） ----------
   mk('/mission/work_state', 'std_msgs/String', m => {
     document.getElementById('workstate').textContent = m.data;
+    if (m.data.startsWith('裁判指令')) { logLine(m.data); return; }
     logLine(m.data);
-  }, 300);
+  }, 400);
 
   mk('/mission/progress', 'std_msgs/String', m => {
     logLine('进度: ' + m.data);
@@ -210,10 +256,10 @@ function subscribeAll() {
       const txt = mt[1] === '红' ? document.getElementById('redtxt') : document.getElementById('bluetxt');
       fill.style.width = (100 * (+mt[2]) / Math.max(+mt[3], 1)) + '%';
       txt.textContent = `${mt[2]} / ${mt[3]}`;
-      if (+mt[2] > grabbed) grabbed = +mt[2];
-      document.getElementById('stg').textContent = grabbed;
+      if (mt[1] === '红') document.getElementById('str').textContent = mt[2];
+      else document.getElementById('stb').textContent = mt[2];
     }
-  }, 300);
+  }, 400);
 
   mk('/mission/red_required', 'std_msgs/Int32', m => {
     document.getElementById('redtxt').textContent =
@@ -224,48 +270,28 @@ function subscribeAll() {
       document.getElementById('bluetxt').textContent.split('/')[0].trim() + ' / ' + m.data;
   });
 
-  mk('/map_volatile', 'nav_msgs/OccupancyGrid', m => { mapData = m; logLine('地图已加载'); }, 5000);
-  mk('/amcl_pose', 'geometry_msgs/PoseWithCovarianceStamped', m => { robotPose = m; }, 200);
-  mk('/plan', 'nav_msgs/Path', m => { planPath = m; }, 500);
-  mk('/camera/image_raw', 'sensor_msgs/Image', drawCamera, 1500);
+  // ---------- 地图 / 位姿 / 路径 ----------
+  mk('/map', 'nav_msgs/OccupancyGrid', m => { mapData = m; logLine('地图已加载'); }, 5000);
+  mk('/amcl_pose', 'geometry_msgs/PoseWithCovarianceStamped', m => { robotPose = m; }, 250);
+  mk('/plan', 'nav_msgs/Path', m => { planPath = m; }, 600);
+
+  // ---------- 摄像头（compressed jpeg，传输量小 45 倍） ----------
+  mk('/camera/image_raw/compressed', 'sensor_msgs/CompressedImage', drawCameraCompressed, 1500);
+
+  let jpegBuf = null;
+  function drawCameraCompressed(m) {
+    try {
+      jpegBuf = 'data:image/jpeg;base64,' + btoa(m.data);
+      camimg.src = jpegBuf;
+    } catch (e) {}
+  }
 }
 
-// ---------- 相机 ----------
-const camCtx = document.getElementById('camimg');
-function drawCamera(m) {
-  try {
-    const w = m.width, h = m.height;
-    const cv = document.createElement('canvas');
-    cv.width = w; cv.height = h;
-    const cx = cv.getContext('2d');
-    const img = cx.createImageData(w, h);
-    let d;
-    if (typeof m.data === 'string') {  // base64
-      const bin = atob(m.data);
-      d = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) d[i] = bin.charCodeAt(i);
-    } else d = m.data;
-    const step = m.step || w * 3;
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const si = y * step + x * 3, di = (y * w + x) * 4;
-        img.data[di] = d[si]; img.data[di + 1] = d[si + 1];
-        img.data[di + 2] = d[si + 2]; img.data[di + 3] = 255;
-      }
-    }
-    cx.putImageData(img, 0, 0);
-    camimg.src = cv.toDataURL('image/jpeg', 0.7);
-  } catch (e) { /* 帧数据异常忽略 */ }
-}
+const camimg = document.getElementById('camimg');
 
 // ---------- 地图渲染 ----------
 const cv = document.getElementById('mapcv');
 const ctx = cv.getContext('2d');
-function worldToPx(x, y) {
-  const i = mapData.info;
-  const ox = i.origin.position.x, oy = i.origin.position.y;
-  return [ (x - ox) / i.resolution, i.height - (y - oy) / i.resolution ];
-}
 function draw() {
   const wrap = cv.parentElement;
   if (cv.width !== wrap.clientWidth || cv.height !== wrap.clientHeight) {
@@ -278,37 +304,20 @@ function draw() {
     const sc = Math.min(cv.width / i.width, cv.height / i.height) * 0.96;
     const offx = (cv.width - i.width * sc) / 2;
     const offy = (cv.height - i.height * sc) / 2;
-    if (!mapData._cv) {
-      const oc = document.createElement('canvas');
-      oc.width = i.width; oc.height = i.height;
-      const ox = oc.getContext('2d');
-      const idata = ox.createImageData(i.width, i.height);
-      for (let n = 0; n < i.width * i.height; n++) {
-        const v = mapData.data[n];
-        let rr = 11, gg = 15, bb = 22;
-        if (v === 0) { rr = 28; gg = 37; bb = 50; }
-        else if (v > 65) { rr = 143; gg = 163; bb = 191; }
-        const di = n * 4;
-        idata.data[di] = rr; idata.data[di + 1] = gg;
-        idata.data[di + 2] = bb; idata.data[di + 3] = 255;
-      }
-      ox.putImageData(idata, 0, 0);
-      mapData._cv = oc;
-    }
     ctx.save();
     ctx.translate(offx, offy);
     ctx.scale(sc, sc);
-    ctx.translate(0, i.height);
-    ctx.scale(1, -1);
-    ctx.drawImage(mapData._cv, 0, 0);
+    for (let r = 0; r < i.height; r++) {
+      for (let c = 0; c < i.width; c++) {
+        const v = mapData.data[r * i.width + c];
+        if (v === -1) continue;
+        ctx.fillStyle = v === 0 ? '#1c2532' : '#8fa3bf';
+        ctx.fillRect(c, i.height - 1 - r, 1, 1);
+      }
+    }
     ctx.restore();
-
-    const tf = (x, y) => {
-      const p = worldToPx(x, y);
-      return [offx + p[0] * sc, offy + (i.height - p[1]) * sc];
-    };
-
-    // 规划路径
+    const tf = (x, y) => [offx + (x - i.origin.position.x) / i.resolution * sc,
+                          offy + (i.height - (y - i.origin.position.y) / i.resolution) * sc];
     if (planPath && planPath.poses.length) {
       ctx.strokeStyle = '#22d3ee'; ctx.lineWidth = 2; ctx.beginPath();
       planPath.poses.forEach((ps, idx) => {
@@ -317,8 +326,6 @@ function draw() {
       });
       ctx.stroke();
     }
-
-    // 机器人
     if (robotPose) {
       const p = robotPose.pose.pose.position;
       const o = robotPose.pose.pose.orientation;
@@ -329,24 +336,32 @@ function draw() {
       ctx.rotate(-yaw);
       ctx.fillStyle = '#4ade80';
       ctx.beginPath();
-      ctx.moveTo(10, 0); ctx.lineTo(-6, 6); ctx.lineTo(-6, -6); ctx.closePath();
+      ctx.moveTo(11, 0); ctx.lineTo(-7, 7); ctx.lineTo(-7, -7); ctx.closePath();
       ctx.fill();
-      ctx.strokeStyle = '#052e16'; ctx.stroke();
       ctx.restore();
     }
+    // 放置区标记 A/B/C
+    ctx.font = 'bold 12px sans-serif';
+    ctx.fillStyle = '#fbbf24';
+    [['A', -2.5, 2.1], ['B', -6.0, -13.0], ['C', 6.0, -12.0]].forEach(([ch, x, y]) => {
+      const [px, py] = tf(x, y);
+      ctx.fillText(ch, px - 4, py + 4);
+      ctx.strokeStyle = '#fbbf24';
+      ctx.strokeRect(px - 10, py - 10, 20, 20);
+    });
   } else {
     ctx.fillStyle = '#334155';
-    ctx.font = '16px sans-serif';
-    ctx.fillText('等待 /map …', 30, 40);
+    ctx.font = '15px sans-serif';
+    ctx.fillText('等待 /map …', 24, 36);
   }
-  // 计时
   if (t0Task) {
     const s = Math.floor((Date.now() - t0Task) / 1000);
     document.getElementById('stt').textContent =
       `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
   }
-  }
-setInterval(draw, 200);
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
 connect();
 </script>
 </body>

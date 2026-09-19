@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>裁判任务输入台</title>
+<script src="roslib.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0b0f16; color: #dbe4f0; font-family: "Microsoft YaHei", sans-serif;
+    height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+  header { display: flex; align-items: center; gap: 14px; padding: 10px 20px;
+    background: #111827; border-bottom: 1px solid #1f2b3d; }
+  header h1 { font-size: 20px; font-weight: 600; color: #f8fafc; }
+  #conn { padding: 3px 12px; border-radius: 12px; font-size: 13px; background: #7f1d1d; color: #fecaca; }
+  #conn.ok { background: #14532d; color: #bbf7d0; }
+  main { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px; min-height: 0; }
+  .panel { background: #111827; border: 1px solid #1f2b3d; border-radius: 12px; padding: 16px;
+    display: flex; flex-direction: column; }
+  .panel h2 { font-size: 15px; color: #7dd3fc; margin-bottom: 12px; }
+  /* 快捷按钮 */
+  .quick { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .qbtn { padding: 22px 12px; border: 2px solid #334155; border-radius: 12px;
+    background: #0b0f16; color: #f1f5f9; font-size: 17px; font-weight: 600;
+    cursor: pointer; text-align: center; transition: all .15s; }
+  .qbtn:hover { border-color: #f59e0b; background: #1a2330; }
+  .qbtn:active { transform: scale(0.97); }
+  .qbtn small { display: block; font-size: 12px; color: #94a3b8; margin-top: 6px; font-weight: 400; }
+  /* 自由输入 */
+  #txt { width: 100%; height: 90px; background: #0b0f16; color: #f1f5f9;
+    border: 1px solid #334155; border-radius: 10px; padding: 12px; font-size: 16px;
+    resize: none; outline: none; }
+  #txt:focus { border-color: #f59e0b; }
+  #send { margin-top: 10px; width: 100%; padding: 12px; border: none; border-radius: 10px;
+    background: #d97706; color: #fff; font-size: 16px; font-weight: 700; cursor: pointer; }
+  #send:hover { background: #f59e0b; }
+  #send:disabled { background: #475569; }
+  .hint { font-size: 12px; color: #64748b; margin-top: 8px; line-height: 1.6; }
+  #ack { margin-top: 10px; flex: 1; overflow-y: auto; background: #0b0f16;
+    border-radius: 8px; padding: 10px; font-size: 13px; line-height: 1.7; }
+  #ack .ok { color: #4ade80; }
+  #ack .bad { color: #f87171; }
+  footer { padding: 6px 20px; font-size: 12px; color: #475569; background: #111827;
+    border-top: 1px solid #1f2b3d; }
+</style>
+</head>
+<body>
+<header>
+  <h1>裁判任务输入台</h1>
+  <span id="conn">未连接</span>
+</header>
+<main>
+  <div class="panel">
+    <h2>快捷任务（一键发布）</h2>
+    <div class="quick">
+      <button class="qbtn" onclick="quick(1)">任务 1<small>红×1 → A区，蓝×2 → C区</small></button>
+      <button class="qbtn" onclick="quick(2)">任务 2<small>蓝×2 → C区，红×1 → B区</small></button>
+      <button class="qbtn" onclick="quick(3)">任务 3<small>红×3 → B区</small></button>
+      <button class="qbtn" onclick="quick(4)">任务 4<small>蓝×2 → A区</small></button>
+    </div>
+    <div class="hint" style="margin-top:12px">
+      点击按钮 = 发布 "任务N" 到机器人（大模型解析后自动执行）。<br>
+      方块在每轮任务开始时自动复位到固定站位。
+    </div>
+  </div>
+  <div class="panel">
+    <h2>自由任务输入（中文）</h2>
+    <textarea id="txt" placeholder="例：搬运2个红色包裹到A区，1个蓝色包裹至C区"></textarea>
+    <button id="send" onclick="sendText()">发布任务（大模型解析）</button>
+    <div id="ack"></div>
+    <div class="hint">支持自然语言：颜色（红/蓝）+ 数量 + 区域（A/B/C）。<br>复杂任务由 DeepSeek 大模型解析，结果显示在指挥面板"任务信息"栏。</div>
+  </div>
+</main>
+<footer>输入经 /referee/text → 大模型解析 → /mission/command · 与 coStudio 俯瞰场景同源实时</footer>
+<script>
+const VM = location.hostname || '192.168.30.131';
+let ros = null;
+
+function connect() {
+  ros = new ROSLIB.Ros({ url: `ws://${VM}:9090` });
+  ros.on('connection', () => {
+    const c = document.getElementById('conn');
+    c.textContent = '已连接'; c.classList.add('ok');
+    const ack = new ROSLIB.Topic({ ros, name: '/referee/ack', type: 'std_msgs/String' });
+    ack.subscribe(m => {
+      try {
+        const d = JSON.parse(m.data);
+        ackLine(d.ok ? 'ok' : 'bad', d.detail);
+      } catch (e) {}
+    });
+  });
+  ros.on('error', () => { document.getElementById('conn').textContent = '连接失败'; });
+  ros.on('close', () => {
+    const c = document.getElementById('conn');
+    c.textContent = '断开，重连中…'; c.classList.remove('ok');
+    setTimeout(connect, 3000);
+  });
+}
+
+function ackLine(kind, text) {
+  const el = document.getElementById('ack');
+  const d = document.createElement('div');
+  d.className = kind;
+  const t = new Date().toLocaleTimeString('zh-CN', {hour12: false});
+  d.textContent = `[${t}] ${text}`;
+  el.appendChild(d);
+  while (el.childElementCount > 20) el.removeChild(el.firstChild);
+  el.scrollTop = el.scrollHeight;
+}
+
+function pubText(data) {
+  const t = new ROSLIB.Topic({ ros, name: '/referee/text', type: 'std_msgs/String' });
+  t.publish(new ROSLIB.Message({ data }));
+}
+
+function quick(n) {
+  pubText('任务' + n);
+  ackLine('', `已发布快捷任务${n}`);
+}
+
+function sendText() {
+  const v = document.getElementById('txt').value.trim();
+  if (!v) return;
+  pubText(v);
+  document.getElementById('send').disabled = true;
+  setTimeout(() => { document.getElementById('send').disabled = false; }, 3000);
+}
+connect();
+</script>
+</body>
+</html>
