@@ -2385,7 +2385,7 @@
     </model>
     <plugin name='gazebo_link_attacher' filename='libgazebo_link_attacher.so'/>
     <model name='obstacle_1'>
-      <pose>-3.5 0 0.25 0 0 0</pose>
+      <pose>-1.3 0.92 0.25 0 0 0</pose>
       <link name='link'>
         <gravity>0</gravity>
         <inertial>

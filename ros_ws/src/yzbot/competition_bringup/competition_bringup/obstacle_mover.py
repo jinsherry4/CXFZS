@@ -20,7 +20,11 @@ from gazebo_msgs.msg import ModelStates
 
 
 DEFAULT_OBSTACLES = (
-    '[{model: obstacle_1, x: -3.5, y: 0.0, axis: x, amp: 1.0, period: 24.0},'
+    # r50: obstacle_1 迁至 home-A 走廊（机器人每次任务必经直线），
+    # 沿 y 轴小幅扫掠横穿走廊——消除"不在任务路线上"失分（评分项5）。
+    # 中心(-1.3,0.92) alt. 线上点(-1.25,0.83)/(-1.3,0.99) 垂距0.04-0.30m；
+    # amp 收窄至 0.45 避免扫掠过深干扰直驱；period 24s 低速不推挤。
+    '[{model: obstacle_1, x: -1.3, y: 0.92, axis: y, amp: 0.45, period: 24.0},'
     ' {model: obstacle_2, x: -2.6, y: -6.0, axis: x, amp: 0.8, period: 22.0}]'
 )
 
