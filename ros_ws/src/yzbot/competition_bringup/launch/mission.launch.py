@@ -67,6 +67,14 @@ def generate_launch_description():
         ),
         Node(
             package='competition_bringup',
+            executable='referee_node',
+            name='referee_node',
+            output='screen',
+            parameters=[{'use_sim_time': True,
+                         'api_key': api_key}],
+        ),
+        Node(
+            package='competition_bringup',
             executable='carry_follower',
             name='carry_follower',
             output='screen',

@@ -31,6 +31,7 @@ setup(
             'cmd_vel_watchdog = competition_bringup.cmd_vel_watchdog:main',
             'carry_follower = competition_bringup.carry_follower:main',
             'scan_filter = competition_bringup.scan_filter:main',
+            'referee_node = competition_bringup.referee_node:main',
         ],
     },
 )

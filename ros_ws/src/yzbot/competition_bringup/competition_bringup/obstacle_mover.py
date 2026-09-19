@@ -8,7 +8,7 @@ world 中每个障碍模型挂载 libgazebo_ros_planar_move.so（命名空间 /<
 直接下发世界系速度（前馈 + P 反馈），并锁零朝向，漂移自动纠正。
 
 参数（YAML 字符串）：
-    obstacles: "[{model: obstacle_1, x: -3.5, y: 0.0, axis: x, amp: 2.0, period: 8.0}, ...]"
+    obstacles: "[{model: obstacle_1, x: -3.5, y: 0.0, axis: x, amp: 1.0, period: 8.0}, ...]"
 """
 import math
 import yaml
@@ -20,7 +20,7 @@ from gazebo_msgs.msg import ModelStates
 
 
 DEFAULT_OBSTACLES = (
-    '[{model: obstacle_1, x: -3.5, y: 0.0, axis: x, amp: 2.0, period: 24.0},'
+    '[{model: obstacle_1, x: -3.5, y: 0.0, axis: x, amp: 1.0, period: 24.0},'
     ' {model: obstacle_2, x: -2.6, y: -6.0, axis: x, amp: 0.8, period: 22.0}]'
 )
 

@@ -56,6 +56,17 @@ SOLVE_PROMPT = (
     '映射规则：{mapping}\n题目：{question}'
 )
 
+# 裁判直述任务句式（评分流程一：裁判发布搬运物体颜色与放置区域任务）：
+# "搬运2个红色包裹到A区，3个蓝色包裹至C区" —— 无需映射计算，直接提取。
+TASK_PROMPT = (
+    '从裁判任务指令中提取搬运任务。只输出一行形如 [red,2,A;blue,3,C] 的指令：'
+    '方括号包裹，多条用分号分隔，每条为 颜色(red/blue),数量(整数),区域(A/B/C)。'
+    '不要推理，不要输出其他任何内容。\n'
+    '示例：\n任务：搬运2个红色包裹到A区，3个蓝色包裹至C区\n'
+    '输出：[red,2,A;blue,3,C]\n\n任务：红色1个到A区，蓝色2个去C区\n'
+    '输出：[red,1,A;blue,2,C]\n\n任务：{question}\n输出：'
+)
+
 RETRY_PROMPT = (
     '只输出一行最终答案，格式为 [red,4,A;blue,1,C]（颜色red/blue,数量整数,区域A/B/C，分号分隔）。'
     '不要输出其他任何内容。\n映射规则：{mapping}\n题目：{question}'
@@ -118,7 +129,13 @@ class LlmParser(Node):
         self._status('大模型解析中…')
         answer = None
         items = []
-        prompts = [SOLVE_PROMPT, RETRY_PROMPT]
+        # 评分流程一（裁判直述任务）：含颜色+区且非数学题 → 用 TASK_PROMPT
+        # 放宽：含颜色 + 任意区域表达（区/A/B/C）即视为裁判直述任务，
+        # 支持 "2红到A"、"蓝2去C" 等极简写法。
+        is_direct_task = (re.search(r'红|蓝|red|blue', question)
+                          and re.search(r'区|[ABCabc]', question)
+                          and not re.search(r'计算|x=|y=|分别为多少', question))
+        prompts = [TASK_PROMPT if is_direct_task else SOLVE_PROMPT, RETRY_PROMPT]
         retries = int(self.get_parameter('max_retries').value)
         for attempt in range(max(1, retries + 1)):
             prompt_tpl = prompts[0] if attempt == 0 else prompts[-1]

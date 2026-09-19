@@ -50,6 +50,7 @@ echo '[1/6] 关闭残留仿真与任务链进程(全量)...'
 # 整轮在污染世界里执行。因此：全量杀 + 端口释放确认。
 pkill -f 'ros2 [l]aunch' 2>/dev/null; sleep 1
 pkill -f 'gz[s]erver' 2>/dev/null; pkill -f 'gz[c]lient' 2>/dev/null; pkill -f '[r]viz2' 2>/dev/null
+pkill -f '[g]azebo --verbose' 2>/dev/null   # r48: GUI gazebo 二进制不在 gzserver/gzclient 模式内
 pkill -f '[m]ission_node' 2>/dev/null; pkill -f '[l]lm_parser' 2>/dev/null; pkill -f '[o]bstacle_mover' 2>/dev/null
 pkill -f '[c]md_vel_watchdog' 2>/dev/null; pkill -f '[c]arry_follower' 2>/dev/null; pkill -f '[q]uestion_bridge' 2>/dev/null; pkill -f '[s]can_filter' 2>/dev/null
 pkill -f '[t]ruth_odom' 2>/dev/null; pkill -f '[l]oc_shim' 2>/dev/null
@@ -63,6 +64,7 @@ sleep 2
 # SIGTERM 后最多等 6s 让 gzserver 优雅退出（保存世界/断开传输），未退则 -9
 for i in 1 2 3 4 5 6; do pgrep -f 'gz[s]erver' >/dev/null || break; sleep 1; done
 pkill -9 -f 'gz[s]erver' 2>/dev/null
+pkill -9 -f '[g]azebo --verbose' 2>/dev/null   # r48
 for i in 1 2 3 4 5; do pgrep -f 'gz[s]erver' >/dev/null || break; sleep 1; done
 sleep 1
 
@@ -148,6 +150,9 @@ if [ -n "$OX" ] && [ -n "$OY" ]; then
     echo "  警告: 机器人偏离出生点 ${ODM}m——世界可能未重置，本轮结果不可信！"
   fi
 fi
+
+echo '[4.5/6] 启动相机 JPEG 压缩转发(供 coStudio 可靠渲染)...'
+( nohup python3 /home/ros/cam_jpeg.py > /tmp/cam_jpeg.log 2>&1 ) &
 
 echo '[5/6] 启动 rosbridge(coStudio 连 ws://本机IP:9090)...'
 nohup ros2 launch rosbridge_server rosbridge_websocket_launch.xml > ~/comp_logs/rosbridge.log 2>&1 &
