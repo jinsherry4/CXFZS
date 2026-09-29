@@ -100,10 +100,11 @@
       "imageTopicPath": "/camera/image_raw",
       "foxglovePanelTitle": "识别画面"
     },
-    "Log!37wr55x": {
-      "topicPath": "/rosout",
-      "minLevel": 1,
-      "searchTerms": "",
+    "RosOut!37wr55x": {
+      "topicToRender": "/rosout",
+      "minLogLevel": 2,
+      "searchTerms": [],
+      "fontSize": 12,
       "foxglovePanelTitle": "任务日志"
     },
     "Indicator!2f185h3": {
@@ -204,7 +205,7 @@
         "first": {
           "first": {
             "first": "Image!42iutju",
-            "second": "Log!37wr55x",
+            "second": "RosOut!37wr55x",
             "direction": "row"
           },
           "second": "3D!274x6jb",

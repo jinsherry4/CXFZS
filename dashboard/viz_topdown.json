@@ -319,10 +319,11 @@
    "imageMode": {},
    "fixedFrame": "map"
   },
-  "RawMessages!37wr55x": {
-   "topicPath": "/mission/work_state",
-   "minLevel": 1,
-   "searchTerms": "",
+  "RosOut!37wr55x": {
+   "topicToRender": "/rosout",
+   "minLogLevel": 2,
+   "searchTerms": [],
+   "fontSize": 12,
    "foxglovePanelTitle": "任务日志"
   }
  },
@@ -351,7 +352,7 @@
     "first": {
      "first": {
       "first": "Image!42iutju",
-      "second": "Log!37wr55x",
+      "second": "RosOut!37wr55x",
       "direction": "row"
      },
      "second": "3D!274x6jb",
