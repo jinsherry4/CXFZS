@@ -156,11 +156,12 @@ class MissionNode(Node):
                 self._true_xy = (p.x, p.y)
         # r64j 墙体实体兜底：真实位姿陷进墙内（物理推挤等极端情况）立即弹回
         # 最近安全点——保证"墙有实体"，机器人任何瞬间都不会留在墙里。
+        # r64k: 触发线提前到"+0.02"（贴墙前就弹开），并增加搬运方块兜底。
         if self._true_xy is not None:
             c = self._wall_clear(self._true_xy[0], self._true_xy[1])
             if c >= 0.30:
                 self._last_safe = self._true_xy
-            elif c < -0.02 and self._last_safe is not None \
+            elif c < 0.02 and self._last_safe is not None \
                     and time.monotonic() >= self._wall_pushback_ok_after:
                 self._wall_pushback_ok_after = time.monotonic() + 1.0
                 x0, y0 = self._last_safe
@@ -174,8 +175,27 @@ class MissionNode(Node):
                 self.cli_setent.call_async(req)
                 self.get_logger().warning(
                     f'[r64] 墙体实体兜底：真实位姿({self._true_xy[0]:.2f},'
-                    f'{self._true_xy[1]:.2f})陷墙(间距{c:.2f})，'
+                    f'{self._true_xy[1]:.2f})贴墙(间距{c:.2f})，'
                     f'弹回安全点({x0:.2f},{y0:.2f})')
+            elif getattr(self, '_carry_name', None) is not None \
+                    and self._carry_name in self._cubes:
+                cx2, cy2 = self._cubes[self._carry_name]
+                cc = self._wall_clear(cx2, cy2)
+                if cc < 0.02 and self._last_safe is not None \
+                        and time.monotonic() >= self._wall_pushback_ok_after:
+                    self._wall_pushback_ok_after = time.monotonic() + 1.0
+                    x0, y0 = self._last_safe
+                    req = SetEntityState.Request()
+                    req.state.name = 'six_arm'
+                    req.state.reference_frame = 'world'
+                    req.state.pose.position.x = x0
+                    req.state.pose.position.y = y0
+                    req.state.pose.position.z = 0.0
+                    req.state.pose.orientation.w = 1.0
+                    self.cli_setent.call_async(req)
+                    self.get_logger().warning(
+                        f'[r64] 方块实体兜底：{self._carry_name} '
+                        f'({cx2:.2f},{cy2:.2f})切墙(间距{cc:.2f})，弹回安全点')
 
     def _obs_unit_dir(self, nm):
         """r64g: 障碍运动单位方向；速度≈0（正弦端点驻留）时用 ≤2s 内最近方向。
@@ -1143,7 +1163,10 @@ class MissionNode(Node):
             # 直接摆放,无接触力),V_MAX 0.62 是速度闭环时代的遗留约束,
             # 已不适用;保持 70ms 节奏给 20Hz 跟随链(model_states+tick)余量
             fast = not getattr(self, '_carrying', False)
-            step = min(0.18 if fast else 0.11, dist)
+            # r64l 视觉连续化：空载步进 0.18m/20ms(≈9m/s) → 0.08m/25ms(≈3.2m/s)。
+            # 9m/s 时 Gazebo 渲染丢帧会让机器人每帧位移达 0.9m，跨越 0.15m 厚薄墙
+            # 时视觉上"跳"成穿墙（真值轨迹始终在墙外，但裁判/观众看到的就是穿）。
+            step = min(0.08 if fast else 0.11, dist)
             _iter_t0 = time.monotonic()
             nx = _cx + step * math.cos(bearing)
             ny = _cy + step * math.sin(bearing)
@@ -1267,7 +1290,7 @@ class MissionNode(Node):
             req.state.pose.orientation.w = qw
             self.cli_setent.call_async(req)
             if fast:
-                time.sleep(0.02)
+                time.sleep(0.025)
             else:
                 # 携带档: r63 0.11m/50ms≈1.5-2m/s（model_states 10Hz 滞后
                 # ≤15cm 仍可接受）
