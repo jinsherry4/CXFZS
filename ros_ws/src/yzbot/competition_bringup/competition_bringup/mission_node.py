@@ -107,6 +107,11 @@ class MissionNode(Node):
                          math.sin(math.radians(-wyaw)), hl, hw)
                         for (wx, wy, wyaw, hl, hw) in self._WALLS]
         self._carry_name = None   # r64: 正在搬运的方块名（阻挡判定豁免）
+        self._last_yaw = None     # r64h: 上一步朝向（贴墙携带时锁朝防方块横扫）
+        # r64j: 墙体实体兜底——监控真实位姿，陷墙即弹回最近安全点
+        self._true_xy = None
+        self._last_safe = None
+        self._wall_pushback_ok_after = 0.0
 
         self.create_subscription(
             PoseWithCovarianceStamped, '/amcl_pose', self._on_amcl, 10)
@@ -147,6 +152,30 @@ class MissionNode(Node):
                 self._obs[nm] = (p.x, p.y)
             elif '_cube_' in nm:
                 self._cubes[nm] = (p.x, p.y)
+            elif nm == 'six_arm':
+                self._true_xy = (p.x, p.y)
+        # r64j 墙体实体兜底：真实位姿陷进墙内（物理推挤等极端情况）立即弹回
+        # 最近安全点——保证"墙有实体"，机器人任何瞬间都不会留在墙里。
+        if self._true_xy is not None:
+            c = self._wall_clear(self._true_xy[0], self._true_xy[1])
+            if c >= 0.30:
+                self._last_safe = self._true_xy
+            elif c < -0.02 and self._last_safe is not None \
+                    and time.monotonic() >= self._wall_pushback_ok_after:
+                self._wall_pushback_ok_after = time.monotonic() + 1.0
+                x0, y0 = self._last_safe
+                req = SetEntityState.Request()
+                req.state.name = 'six_arm'
+                req.state.reference_frame = 'world'
+                req.state.pose.position.x = x0
+                req.state.pose.position.y = y0
+                req.state.pose.position.z = 0.0
+                req.state.pose.orientation.w = 1.0
+                self.cli_setent.call_async(req)
+                self.get_logger().warning(
+                    f'[r64] 墙体实体兜底：真实位姿({self._true_xy[0]:.2f},'
+                    f'{self._true_xy[1]:.2f})陷墙(间距{c:.2f})，'
+                    f'弹回安全点({x0:.2f},{y0:.2f})')
 
     def _obs_unit_dir(self, nm):
         """r64g: 障碍运动单位方向；速度≈0（正弦端点驻留）时用 ≤2s 内最近方向。
@@ -194,7 +223,7 @@ class MissionNode(Node):
             d = math.hypot(dx, dy)
             if d < 1e-6 or d >= margin:
                 continue
-            if (ux * dx + uy * dy) / d > 0.2:
+            if (ux * dx + uy * dy) / d > 0.05:
                 if best is None or d < best[0]:
                     best = (d, dx / d, dy / d)
         return None if best is None else (best[1], best[2])
@@ -207,6 +236,30 @@ class MissionNode(Node):
                 if math.hypot(x - ox, y - oy) < margin:
                     return True
         return False
+
+    def _obs_band_perp(self, x, y):
+        """r64i: 点到各障碍巡逻轴的最小垂距（判候选点是否已绕出走廊带）。"""
+        best = 1e9
+        for nm, (ox, oy) in list(self._obs.items()):
+            u = self._obs_unit_dir(nm)
+            if u is None:
+                continue
+            dx, dy = x - ox, y - oy
+            best = min(best, abs(dx * u[1] - dy * u[0]))
+        return best
+
+    def _seg_obs_clear(self, ax, ay, bx, by, margin, head_skip=0.25):
+        """r64i: 候选跳步全程与移动障碍保持 margin（防绕行候选贴脸穿越）。"""
+        L = math.hypot(bx - ax, by - ay)
+        n = max(2, int(L / 0.1))
+        for i in range(n + 1):
+            t = i / n
+            if t * L < head_skip:
+                continue
+            if self._obstacle_blocking(ax + (bx - ax) * t,
+                                       ay + (by - ay) * t, margin):
+                return False
+        return True
 
     def _cube_blocking(self, x, y, margin, near_xy=None):
         """进点被方块占据？near_xy 1.0m 内的方块豁免（取放作业区必经）。
@@ -224,14 +277,21 @@ class MissionNode(Node):
                 return True
         return False
 
-    def _wait_obstacle(self, x, y, deadline, label='', blocking=None):
-        """等待进点 (x,y) 让开（障碍移出 margin），直到 deadline 超时。"""
+    def _wait_obstacle(self, x, y, deadline, label='', blocking=None,
+                       abort_close=False):
+        """等待进点 (x,y) 让开（障碍移出 margin），直到 deadline 超时。
+        r64i: abort_close=True 时，一旦障碍开始逼近就提前退出——原地等会被
+        障碍扫到身上（实机 0.17m 持续接触并被物理推挤），应回主循环后退。"""
         blk = blocking or (lambda: self._obstacle_blocking(x, y, 0.75))
         while time.monotonic() < deadline:
             if not blk():
                 self.get_logger().info(
                     f'[r49] {label}: 障碍已让开，继续直驱')
                 return True
+            if abort_close and self._obstacle_closing_vec(x, y) is not None:
+                self.get_logger().info(
+                    f'[r49] {label}: 障碍逼近，中断等待转后退避让')
+                return False
             time.sleep(0.2)
         self.get_logger().warning(f'[r49] {label}: 障碍未让开，超时')
         return False
@@ -552,7 +612,7 @@ class MissionNode(Node):
         (-4.95, -4.86, -90.0, 1.50, 0.075),    # Wall_75
         (-3.89, -9.15, -30.0, 2.12, 0.075),    # Wall_81
     )
-    _WLIN = 0.26   # 步进防穿墙余量（车身半径 0.30 档，允许残差 ≤0.04m 不可见）
+    _WLIN = 0.30   # 步进防穿墙余量（覆盖车体旋转扫掠半径：含轮对角线 ≈0.28m）
 
     def _seg_hits_box(self, ax, ay, bx, by, box):
         """线段采样 0.1m 步进，检查是否进入任一碰撞盒。"""
@@ -731,19 +791,21 @@ class MissionNode(Node):
         下一步的间距：变浅（逃离）一律放行，变深才拦。
         r64b 修复：携带尖端项此前会"放行"身体入墙（尖端在墙另一侧间距变大
         就判 True，实机表现为整车穿 Wall_31）。现在身体项规定为硬约束，
-        尖端只在"又近又变深"时追加拦截，绝不放宽身体规则。"""
+        尖端只在"又近又变深"时追加拦截，绝不放宽身体规则。
+        r64h：尖端前伸 0.42→0.45（与 carry_follower 实参一致）、阈值
+        0.10→0.18（方块半宽 0.15 + 余量）——方块不再切进墙里。"""
         inf = self._WLIN if margin is None else margin
         c1 = self._wall_clear(nx, ny)
         if c1 < inf and c1 <= self._wall_clear(cx, cy) + 1e-6:
             return False                      # 身体比现状更深：拦
         if getattr(self, '_carrying', False):
-            fx = nx + 0.42 * math.cos(bearing)
-            fy = ny + 0.42 * math.sin(bearing)
+            fx = nx + 0.45 * math.cos(bearing)
+            fy = ny + 0.45 * math.sin(bearing)
             c2 = self._wall_clear(fx, fy)
-            if c2 < 0.10 and c2 <= self._wall_clear(
-                    cx + 0.42 * math.cos(bearing),
-                    cy + 0.42 * math.sin(bearing)) + 1e-6:
-                return False                  # 尖端贴墙且更深：拦
+            if c2 < 0.18 and c2 <= self._wall_clear(
+                    cx + 0.45 * math.cos(bearing),
+                    cy + 0.45 * math.sin(bearing)) + 1e-6:
+                return False                  # 尖端（含方块）贴墙且更深：拦
         return True
 
     def _wall_blocked(self, x, y, bearing):
@@ -1116,12 +1178,43 @@ class MissionNode(Node):
             _sweep_now = self._obstacle_sweep_blocking(_cx, _cy)
             if _retreat is None and (self._obstacle_blocking(nx, ny, 0.75) or (
                     _sweep_next and not _sweep_now)):
-                if not self._wait_obstacle(
+                # r64h 避障编舞：先横向绕出巡逻带（看得见的绕行），绕不开再停等
+                det = None
+                for sgn in (1.0, -1.0):
+                    for lat in (0.9, 1.2):
+                        tx = nx + 0.20 * math.cos(bearing) - sgn * lat * math.sin(bearing)
+                        ty = ny + 0.20 * math.sin(bearing) + sgn * lat * math.cos(bearing)
+                        if self._obs_band_perp(tx, ty) < 0.85:
+                            continue              # 未绕出障碍巡逻带
+                        if not self._seg_obs_clear(_cx, _cy, tx, ty, 0.85):
+                            continue              # 跳步全程贴障碍
+                        if self._obstacle_blocking(tx, ty, 0.75):
+                            continue
+                        if self._wall_clear(tx, ty) <= \
+                                max(self._wall_clear(_cx, _cy), self._WLIN) - 1e-6:
+                            continue
+                        if self._wall_seg_hit(_cx, _cy, tx, ty, head_skip=0.15):
+                            continue
+                        if self._cube_blocking(tx, ty, 0.37,
+                                               (spot['x'], spot['y'])):
+                            continue
+                        det = (tx, ty)
+                        break
+                    if det:
+                        break
+                if det:
+                    nx, ny = det
+                    self.get_logger().info(
+                        f'[r64] 绕行障碍 -> {det[0]:.2f},{det[1]:.2f}')
+                elif not self._wait_obstacle(
                         nx, ny, time.monotonic() + 20.0, '直驱途中',
                         blocking=lambda: (
                             self._obstacle_blocking(nx, ny, 0.75)
                             or (self._obstacle_sweep_blocking(nx, ny)
-                                and not self._obstacle_sweep_blocking(_cx, _cy)))):
+                                and not self._obstacle_sweep_blocking(_cx, _cy))),
+                        abort_close=True):
+                    if self._obstacle_closing_vec(_cx, _cy) is not None:
+                        continue          # 障碍逼近：回主循环走后退避让
                     self._state('直驱途中障碍等待超时，改走 Nav2 避障')
                     return False
             # r50 评分项5 加固：非目标方块也是障碍——侧向绕行，绕不开才退 Nav2
@@ -1156,6 +1249,12 @@ class MissionNode(Node):
             # 旧版直接把 90 当弧度用，终点航向随机错乱（预存bug）
             nyaw = bearing if dist > 0.6 else math.radians(
                 spot.get('yaw', math.degrees(bearing)))
+            # r64h: 携带方块且贴墙时锁住朝向——原地转身会让 0.45m 前方的
+            # 方块横扫扫过墙面（视觉上"方块/手臂切墙"的根因之一）
+            if getattr(self, '_carrying', False) and self._last_yaw is not None \
+                    and self._wall_clear(_cx, _cy) < 0.75:
+                nyaw = self._last_yaw
+            self._last_yaw = nyaw
             req = SetEntityState.Request()
             req.state.name = 'six_arm'
             req.state.reference_frame = 'world'
