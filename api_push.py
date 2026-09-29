@@ -3,6 +3,7 @@
 # 用法: python api_push.py [文件...]  无参数=全量推送；指定文件=增量推送
 import base64
 import json
+import os
 import subprocess
 import sys
 import time
@@ -81,7 +82,9 @@ def main():
         for f in files:
             if not (REPO_DIR / f).is_file():
                 raise SystemExit(f"文件不存在: {f}")
-        msg = "修复: blue_cube_5 穿模(出生点y=-3.75)+航点同步+scan_filter孤儿清理+RViz清场/动态XAUTH"
+        msg = os.environ.get(
+            "API_PUSH_MSG",
+            "修复: blue_cube_5 穿模(出生点y=-3.75)+航点同步+scan_filter孤儿清理+RViz清场/动态XAUTH")
     else:
         out = subprocess.run(["git", "-c", "core.quotepath=false", "ls-files"],
                              capture_output=True, text=True, encoding="utf-8", cwd=REPO_DIR)
