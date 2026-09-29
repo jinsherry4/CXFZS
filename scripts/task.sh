@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-#  task.sh — 一键发题（正式链路）
+#  task.sh — 一键发题并执行（正式链路）
 #  /referee/text → 大模型解析 → /mission/command → 执行
 #
 #  用法（虚拟机终端）:
@@ -8,6 +8,8 @@
 #    bash ~/task.sh '小爱需要2只猫和5只狗…（应用题原文）'          # 应用题→大模型解题
 #    bash ~/task.sh 1          # 快捷任务1..4（演示旁路, 跳过大模型）
 #    bash ~/task.sh            # 无参数: 显示用法 + 当前状态
+#
+#  内置栈健康预检：仿真被关/服务掉线时自动恢复后再发题
 # ============================================================
 set +u
 source /opt/ros/humble/setup.bash 2>/dev/null
@@ -19,6 +21,23 @@ if [ -z "$1" ]; then
   echo "---- 当前状态（最近 3 条）----"
   journalctl -u competition-mission -n 3 --no-pager 2>/dev/null | tail -3
   exit 0
+fi
+
+# ---- 预检 1：仿真世界（gzserver 缺失 = Gazebo 窗口被关 → 自动恢复）----
+if ! pgrep -f 'gz[s]erver' >/dev/null; then
+  echo "[预检] 仿真未运行（Gazebo 窗口可能被关闭）→ 自动执行 go.sh 恢复（约1-2分钟）..."
+  bash /home/ros/go.sh > /tmp/go_restore.log 2>&1
+  if ! pgrep -f 'gz[s]erver' >/dev/null; then
+    echo "[错误] 仿真恢复失败，详见 /tmp/go_restore.log"; exit 1
+  fi
+  echo "[预检] 仿真已恢复"
+fi
+
+# ---- 预检 2：mission 服务 ----
+if [ "$(systemctl is-active competition-mission 2>/dev/null)" != "active" ]; then
+  echo "[预检] mission 服务未运行 → 启动中..."
+  echo ros | sudo -S systemctl start competition-mission 2>/dev/null
+  sleep 6
 fi
 
 echo "---- 发布前状态 ----"
