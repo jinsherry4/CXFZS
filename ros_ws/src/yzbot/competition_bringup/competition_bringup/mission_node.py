@@ -229,10 +229,11 @@ class MissionNode(Node):
         return False
 
     def _obstacle_closing_vec(self, cx, cy, margin=0.8):
-        """r64: 有障碍正逼近机器人（追尾危险）→ 返回"障碍→机器人"单位向量。
+        """r64: 有障碍正逼近（或已贴脸）机器人 → 返回"障碍→机器人"单位向量。
 
         实机教训：机器人停在障碍行进路径上等让行时，障碍会直接扫进机器人
-        （最近 0.02m 接触）。逼近时不能等，应沿背离方向后退避让。"""
+        （最近 0.02m 接触）；r64m 加严：距离 <0.6m 时无条件后退——障碍在
+        正弦端点折返时方向判据失效，只会被它慢慢推着走（实测 0.39m 近距）。"""
         best = None
         for nm, (ox, oy) in list(self._obs.items()):
             u = self._obs_unit_dir(nm)
@@ -243,7 +244,7 @@ class MissionNode(Node):
             d = math.hypot(dx, dy)
             if d < 1e-6 or d >= margin:
                 continue
-            if (ux * dx + uy * dy) / d > 0.05:
+            if d < 0.6 or (ux * dx + uy * dy) / d > 0.05:
                 if best is None or d < best[0]:
                     best = (d, dx / d, dy / d)
         return None if best is None else (best[1], best[2])
@@ -631,6 +632,23 @@ class MissionNode(Node):
         (7.35, -3.61, 180.0, 4.47, 0.075),     # Wall_72
         (-4.95, -4.86, -90.0, 1.50, 0.075),    # Wall_75
         (-3.89, -9.15, -30.0, 2.12, 0.075),    # Wall_81
+        # r64p ★重大遗漏补全★：world 里还有 Untitled 模型的 13 个 1×1m 灰箱子
+        # （state 块实测位姿），散布中带/漏斗北口/出发区/B区旁等关键通道，
+        # 渲染可见、Nav2 靠激光能看见（所以只是"撞"），而直驱逻辑此前完全
+        # 不知道它们的存在——机器人直接穿箱而过（用户反复报告的"穿灰墙"）。
+        (-10.7673, 4.66367, 0.0, 0.5, 0.5),
+        (-8.89993, -1.11285, 0.0, 0.5, 0.5),
+        (12.6936, -10.8131, 0.0, 0.5, 0.5),
+        (-2.50377, -14.1629, 0.0, 0.5, 0.5),
+        (15.4715, -14.3041, 0.0, 0.5, 0.5),
+        (1.73333, 1.16425, 0.0, 0.5, 0.5),
+        (15.5053, 1.54302, 0.0, 0.5, 0.5),
+        (-2.6955, -3.54292, 0.0, 0.5, 0.5),
+        (6.42454, -3.66884, 0.0, 0.5, 0.5),
+        (8.16205, -7.42608, 0.0, 0.5, 0.5),
+        (1.57466, -7.73198, 0.0, 0.5, 0.5),
+        (-13.437, -7.81538, 0.0, 0.5, 0.5),
+        (-10.6671, -11.0531, 0.0, 0.5, 0.5),
     )
     _WLIN = 0.30   # 步进防穿墙余量（覆盖车体旋转扫掠半径：含轮对角线 ≈0.28m）
 
@@ -675,14 +693,20 @@ class MissionNode(Node):
     _WGRID = 0.30        # 绕墙 A* 栅格边长（m）
 
     def _wall_route_plan(self, a, b):
-        """r64: 栅格 A* 生成 a→b 的无墙网关序列（不含 a，含 b）；无解返回 None。
+        """r64n: 两档绕墙规划——优先 0.35 余量（离墙更远的可视路线），
+        无解回退 0.30（保住红3 等 0.315 贴墙站位的通路）。"""
+        r = self._wall_route_plan_ex(a, b, self._WLIN + 0.05)
+        if r is None:
+            r = self._wall_route_plan_ex(a, b, self._WLIN)
+        return r
+
+    def _wall_route_plan_ex(self, a, b, inf):
+        """栅格 A* 生成 a→b 的无墙网关序列（不含 a，含 b）；无解返回 None。
 
         传送步进（SetEntityState）不经过物理，撞墙会直接"穿过去"，所以
-        直驱航点必须自身就是无墙折线。判定余量 = _WLIN（与步进阈值一致；
-        早期用 _WLIN+0.06 会把红3/蓝3 这类 0.315m 贴墙站位判成"终点不可
-        达"→整腿退 Nav2）。起点豁免（取放站位允许贴墙）。
+        直驱航点必须自身就是无墙折线。判定余量由调用方给（0.35/0.30）。
+        起点豁免（取放站位允许贴墙）；目标格按 _WLIN 容差豁免。
         栅格 0.30m、场域 ±16m，航点表长度 < 120，单次规划 ~10ms 量级。"""
-        inf = self._WLIN
         if self._wall_hit(a[0], a[1], inf * 0.5):
             return None                      # 起点本身深陷墙内，无解
         if self._wall_seg_hit(a[0], a[1], b[0], b[1], inf):
@@ -1163,10 +1187,11 @@ class MissionNode(Node):
             # 直接摆放,无接触力),V_MAX 0.62 是速度闭环时代的遗留约束,
             # 已不适用;保持 70ms 节奏给 20Hz 跟随链(model_states+tick)余量
             fast = not getattr(self, '_carrying', False)
-            # r64l 视觉连续化：空载步进 0.18m/20ms(≈9m/s) → 0.08m/25ms(≈3.2m/s)。
-            # 9m/s 时 Gazebo 渲染丢帧会让机器人每帧位移达 0.9m，跨越 0.15m 厚薄墙
-            # 时视觉上"跳"成穿墙（真值轨迹始终在墙外，但裁判/观众看到的就是穿）。
-            step = min(0.08 if fast else 0.11, dist)
+            # r64l/n/o 视觉连续化：空载步进 0.18m/20ms(≈9m/s) → 0.06m/25ms(≈2.4m/s)。
+            # gzclient 软渲染帧率低（实测 95% CPU/负载15+）时，高速传送会让
+            # 机器人每帧位移过大，跨越薄墙视觉上"跳"成穿墙；2.4m/s 与携带档
+            # (~2.2m/s) 持平，整轮画面连续。同时已关闭 RViz、删除审计相机减负。
+            step = min(0.06 if fast else 0.11, dist)
             _iter_t0 = time.monotonic()
             nx = _cx + step * math.cos(bearing)
             ny = _cy + step * math.sin(bearing)
@@ -1199,7 +1224,7 @@ class MissionNode(Node):
             # （仅未进带时等；已进带时静止等于被追尾，应继续穿出）
             _sweep_next = self._obstacle_sweep_blocking(nx, ny)
             _sweep_now = self._obstacle_sweep_blocking(_cx, _cy)
-            if _retreat is None and (self._obstacle_blocking(nx, ny, 0.75) or (
+            if _retreat is None and (self._obstacle_blocking(nx, ny, 0.85) or (
                     _sweep_next and not _sweep_now)):
                 # r64h 避障编舞：先横向绕出巡逻带（看得见的绕行），绕不开再停等
                 det = None
@@ -1232,7 +1257,7 @@ class MissionNode(Node):
                 elif not self._wait_obstacle(
                         nx, ny, time.monotonic() + 20.0, '直驱途中',
                         blocking=lambda: (
-                            self._obstacle_blocking(nx, ny, 0.75)
+                            self._obstacle_blocking(nx, ny, 0.85)
                             or (self._obstacle_sweep_blocking(nx, ny)
                                 and not self._obstacle_sweep_blocking(_cx, _cy))),
                         abort_close=True):
@@ -1272,9 +1297,10 @@ class MissionNode(Node):
             # 旧版直接把 90 当弧度用，终点航向随机错乱（预存bug）
             nyaw = bearing if dist > 0.6 else math.radians(
                 spot.get('yaw', math.degrees(bearing)))
-            # r64h: 携带方块且贴墙时锁住朝向——原地转身会让 0.45m 前方的
-            # 方块横扫扫过墙面（视觉上"方块/手臂切墙"的根因之一）
-            if getattr(self, '_carrying', False) and self._last_yaw is not None \
+            # r64h/n: 贴墙段锁住朝向——原地转身会让整车（含手臂/前方方块）
+            # 横扫墙面；r64n 推广到空载腿（拿放腿贴墙转身时手臂切墙是
+            # "离场/入场腿穿墙"的成因），仅终点对准（dist≤0.8）不受限制
+            if self._last_yaw is not None and dist > 0.8 \
                     and self._wall_clear(_cx, _cy) < 0.75:
                 nyaw = self._last_yaw
             self._last_yaw = nyaw
