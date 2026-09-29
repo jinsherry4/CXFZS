@@ -98,6 +98,8 @@ class MissionNode(Node):
         self._obs = {}
         self._obs_vel = {}
         self._obs_ts = {}
+        self._obs_lastdir = {}     # r64g: 最近有效运动方向（端点驻留期兜底）
+        self._obs_lastdir_ts = {}
         self._cubes = {}
         self.create_subscription(ModelStates, '/model_states', self._on_model_states, 30)
         # r64: 墙体 OBB 预计算（cos/sin 一次算好，步进 50Hz 校验近似零开销）
@@ -133,14 +135,31 @@ class MissionNode(Node):
                         vx = (p.x - prev[0]) / dt
                         vy = (p.y - prev[1]) / dt
                         ov = self._obs_vel.get(nm, (0.0, 0.0))
-                        self._obs_vel[nm] = (0.5 * ov[0] + 0.5 * vx,
-                                             0.5 * ov[1] + 0.5 * vy)
+                        nv = (0.5 * ov[0] + 0.5 * vx, 0.5 * ov[1] + 0.5 * vy)
+                        self._obs_vel[nm] = nv
+                        mag = math.hypot(nv[0], nv[1])   # 勿用 m：会遮蔽消息参数
+                        if mag >= 0.05:            # 记住最近有效方向
+                            self._obs_lastdir[nm] = (nv[0] / mag, nv[1] / mag)
+                            self._obs_lastdir_ts[nm] = now
                     else:
                         self._obs_vel[nm] = (0.0, 0.0)
                 self._obs_ts[nm] = now
                 self._obs[nm] = (p.x, p.y)
             elif '_cube_' in nm:
                 self._cubes[nm] = (p.x, p.y)
+
+    def _obs_unit_dir(self, nm):
+        """r64g: 障碍运动单位方向；速度≈0（正弦端点驻留）时用 ≤2s 内最近方向。
+
+        端点驻留期（每端约 1.2s）恰是障碍"擦线停留"的时段，旧版直接跳过
+        判定等于把最危险的窗口让开。"""
+        vx, vy = self._obs_vel.get(nm, (0.0, 0.0))
+        v = math.hypot(vx, vy)
+        if v >= 0.05:
+            return (vx / v, vy / v)
+        if time.monotonic() - self._obs_lastdir_ts.get(nm, 0.0) < 2.0:
+            return self._obs_lastdir.get(nm)
+        return None
 
     def _obstacle_sweep_blocking(self, x, y):
         """r64: 目标点是否位于移动障碍"巡逻轴 ±2.0m"的扫掠带内。
@@ -149,11 +168,10 @@ class MissionNode(Node):
         0.29m，用户可见"装上障碍物"）。此判据让机器人要么趁障碍远离时
         快速穿越，要么在带外等待。"""
         for nm, (ox, oy) in list(self._obs.items()):
-            vx, vy = self._obs_vel.get(nm, (0.0, 0.0))
-            v = math.hypot(vx, vy)
-            if v < 0.05:
+            u = self._obs_unit_dir(nm)
+            if u is None:
                 continue
-            ux, uy = vx / v, vy / v
+            ux, uy = u
             dx, dy = x - ox, y - oy
             along = dx * ux + dy * uy
             perp = abs(dx * uy - dy * ux)
@@ -168,14 +186,15 @@ class MissionNode(Node):
         （最近 0.02m 接触）。逼近时不能等，应沿背离方向后退避让。"""
         best = None
         for nm, (ox, oy) in list(self._obs.items()):
-            vx, vy = self._obs_vel.get(nm, (0.0, 0.0))
-            if math.hypot(vx, vy) < 0.05:
+            u = self._obs_unit_dir(nm)
+            if u is None:
                 continue
+            ux, uy = u
             dx, dy = cx - ox, cy - oy
             d = math.hypot(dx, dy)
             if d < 1e-6 or d >= margin:
                 continue
-            if (vx * dx + vy * dy) / d > 0.05:
+            if (ux * dx + uy * dy) / d > 0.2:
                 if best is None or d < best[0]:
                     best = (d, dx / d, dy / d)
         return None if best is None else (best[1], best[2])
@@ -743,7 +762,7 @@ class MissionNode(Node):
                 ty = ny + 0.12 * math.sin(bearing) + sgn * lat * math.cos(bearing)
                 if self._wall_clear(tx, ty) <= max(c_now, self._WLIN) - 1e-6:
                     continue                  # 不得比现状更贴墙
-                if self._wall_seg_hit(cx, cy, tx, ty, head_skip=0.25):
+                if self._wall_seg_hit(cx, cy, tx, ty, head_skip=0.15):
                     continue
                 if self._obstacle_blocking(tx, ty, 0.75):
                     continue
@@ -1119,7 +1138,7 @@ class MissionNode(Node):
                         if not self._cube_blocking(tx, ty, 0.37, _spot_xy) and \
                            not self._obstacle_blocking(tx, ty, 0.75) and \
                            not self._wall_blocked(tx, ty, bearing) and \
-                           not self._wall_seg_hit(_cx, _cy, tx, ty):
+                           not self._wall_seg_hit(_cx, _cy, tx, ty, head_skip=0.15):
                             det = (tx, ty)
                             break
                     if det:
