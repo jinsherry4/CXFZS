@@ -96,8 +96,15 @@ class MissionNode(Node):
         self.cli_setent = self.create_client(SetEntityState, '/set_entity_state')
         # r49: 移动障碍实时位姿缓存（评分项5 直驱避障）
         self._obs = {}
+        self._obs_vel = {}
+        self._obs_ts = {}
         self._cubes = {}
         self.create_subscription(ModelStates, '/model_states', self._on_model_states, 30)
+        # r64: 墙体 OBB 预计算（cos/sin 一次算好，步进 50Hz 校验近似零开销）
+        self._wallcs = [(wx, wy, math.cos(math.radians(-wyaw)),
+                         math.sin(math.radians(-wyaw)), hl, hw)
+                        for (wx, wy, wyaw, hl, hw) in self._WALLS]
+        self._carry_name = None   # r64: 正在搬运的方块名（阻挡判定豁免）
 
         self.create_subscription(
             PoseWithCovarianceStamped, '/amcl_pose', self._on_amcl, 10)
@@ -109,14 +116,69 @@ class MissionNode(Node):
         self._round_no = 0
         self.mission_thread = None
         threading.Thread(target=self._loc_watchdog, daemon=True).start()
+        # r64: 静态走廊自检（纯几何，不依赖定位/仿真），后台跑避免拖慢启动
+        threading.Thread(target=lambda: (time.sleep(5.0),
+                                         self._selfcheck_walls()),
+                         daemon=True).start()
 
     def _on_model_states(self, m):
+        now = time.monotonic()
         for i, nm in enumerate(m.name):
             p = m.pose[i].position
             if nm.startswith('obstacle'):
+                prev = self._obs.get(nm)
+                if prev is not None:
+                    dt = now - self._obs_ts.get(nm, now)
+                    if 0.02 < dt < 0.5:
+                        vx = (p.x - prev[0]) / dt
+                        vy = (p.y - prev[1]) / dt
+                        ov = self._obs_vel.get(nm, (0.0, 0.0))
+                        self._obs_vel[nm] = (0.5 * ov[0] + 0.5 * vx,
+                                             0.5 * ov[1] + 0.5 * vy)
+                    else:
+                        self._obs_vel[nm] = (0.0, 0.0)
+                self._obs_ts[nm] = now
                 self._obs[nm] = (p.x, p.y)
             elif '_cube_' in nm:
                 self._cubes[nm] = (p.x, p.y)
+
+    def _obstacle_sweep_blocking(self, x, y):
+        """r64: 目标点是否位于移动障碍"巡逻轴 ±2.0m"的扫掠带内。
+
+        障碍沿线巡逻；机器人若在带内静止会被障碍追尾擦撞（实测最近
+        0.29m，用户可见"装上障碍物"）。此判据让机器人要么趁障碍远离时
+        快速穿越，要么在带外等待。"""
+        for nm, (ox, oy) in list(self._obs.items()):
+            vx, vy = self._obs_vel.get(nm, (0.0, 0.0))
+            v = math.hypot(vx, vy)
+            if v < 0.05:
+                continue
+            ux, uy = vx / v, vy / v
+            dx, dy = x - ox, y - oy
+            along = dx * ux + dy * uy
+            perp = abs(dx * uy - dy * ux)
+            if perp < 0.75 and abs(along) < 2.0:
+                return True
+        return False
+
+    def _obstacle_closing_vec(self, cx, cy, margin=0.8):
+        """r64: 有障碍正逼近机器人（追尾危险）→ 返回"障碍→机器人"单位向量。
+
+        实机教训：机器人停在障碍行进路径上等让行时，障碍会直接扫进机器人
+        （最近 0.02m 接触）。逼近时不能等，应沿背离方向后退避让。"""
+        best = None
+        for nm, (ox, oy) in list(self._obs.items()):
+            vx, vy = self._obs_vel.get(nm, (0.0, 0.0))
+            if math.hypot(vx, vy) < 0.05:
+                continue
+            dx, dy = cx - ox, cy - oy
+            d = math.hypot(dx, dy)
+            if d < 1e-6 or d >= margin:
+                continue
+            if (vx * dx + vy * dy) / d > 0.05:
+                if best is None or d < best[0]:
+                    best = (d, dx / d, dy / d)
+        return None if best is None else (best[1], best[2])
 
     def _obstacle_blocking(self, x, y, margin):
         """进点 (x,y) 是否被移动障碍占据（中心距 < margin）。"""
@@ -128,8 +190,14 @@ class MissionNode(Node):
         return False
 
     def _cube_blocking(self, x, y, margin, near_xy=None):
-        """进点被方块占据？near_xy 1.0m 内的方块豁免（取放作业区必经）。"""
+        """进点被方块占据？near_xy 1.0m 内的方块豁免（取放作业区必经）。
+        r64: 正在搬运的方块豁免——它固定在车头前 0.45m，不豁免时每一步
+        都误判"前方有方块"，侧绕候选被墙检多余地筛掉后退 Nav2（实机
+        两处 40-60s 级慢腿的根因）。"""
+        carried = getattr(self, '_carry_name', None)
         for nm, (ox, oy) in list(self._cubes.items()):
+            if nm == carried:
+                continue
             if math.hypot(x - ox, y - oy) < margin:
                 if near_xy and math.hypot(ox - near_xy[0],
                                           oy - near_xy[1]) < 1.0:
@@ -430,6 +498,43 @@ class MissionNode(Node):
     _OBS2BOX = (-3.65, -1.55, -6.45, -5.55)          # obstacle_2 巡逻盒
     _W31M = (3.125, 4.675, 1.465, 1.915)             # Wall_31 + 余量(红2走廊)
 
+    # r64: officeroom 31 面墙体几何（world 系：中心x, 中心y, 偏航°, 半长, 半厚）
+    # 解析自 offic_room.world。传送步进必须按此校验，杜绝"直接穿墙"。
+    _WALLS = (
+        (14.23, -4.91, -90.0, 10.00, 0.075),   # Wall_10
+        (-7.27, -8.17, -176.6, 1.64, 0.075),   # Wall_107
+        (-13.38, -8.34, 0.0, 2.25, 0.075),     # Wall_109
+        (3.53, -7.85, 0.0, 3.62, 0.075),       # Wall_113
+        (11.62, -7.71, 180.0, 2.62, 0.075),    # Wall_115
+        (1.91, -4.78, -90.0, 1.25, 0.075),     # Wall_118
+        (-0.69, -14.84, 180.0, 15.00, 0.075),  # Wall_12
+        (0.63, -8.97, -60.0, 1.38, 0.075),     # Wall_120
+        (-8.51, -10.34, -90.0, 2.00, 0.075),   # Wall_125
+        (6.59, -9.94, -90.0, 2.00, 0.075),     # Wall_127
+        (-10.49, -11.73, 165.0, 2.12, 0.075),  # Wall_129
+        (8.82, -11.33, 15.0, 2.38, 0.075),     # Wall_132
+        (-0.25, -13.51, 75.0, 1.50, 0.075),    # Wall_134
+        (-15.62, -4.91, 90.0, 10.00, 0.075),   # Wall_15
+        (-0.69, 5.01, 0.0, 15.00, 0.075),      # Wall_2
+        (3.92, 4.49, -90.0, 0.62, 0.075),      # Wall_29
+        (3.90, 1.69, 90.0, 0.62, 0.075),       # Wall_31
+        (-8.61, 3.51, -90.0, 1.00, 0.075),     # Wall_34
+        (-10.05, 0.90, 0.0, 5.50, 0.075),      # Wall_38
+        (7.15, 1.05, 180.0, 7.12, 0.075),      # Wall_40
+        (-10.00, -1.09, -0.2, 3.50, 0.075),    # Wall_46
+        (-13.77, -1.57, -104.7, 0.59, 0.075),  # Wall_49
+        (-4.90, -2.03, 90.0, 1.38, 0.075),     # Wall_57
+        (4.59, -1.15, -11.6, 2.50, 0.075),     # Wall_59
+        (9.19, -1.20, 30.2, 1.05, 0.075),      # Wall_60
+        (11.51, -1.21, -30.0, 1.00, 0.075),    # Wall_61
+        (1.05, -2.50, 129.2, 1.51, 0.075),     # Wall_66
+        (-9.38, -3.43, 180.0, 4.50, 0.075),    # Wall_68
+        (7.35, -3.61, 180.0, 4.47, 0.075),     # Wall_72
+        (-4.95, -4.86, -90.0, 1.50, 0.075),    # Wall_75
+        (-3.89, -9.15, -30.0, 2.12, 0.075),    # Wall_81
+    )
+    _WLIN = 0.26   # 步进防穿墙余量（车身半径 0.30 档，允许残差 ≤0.04m 不可见）
+
     def _seg_hits_box(self, ax, ay, bx, by, box):
         """线段采样 0.1m 步进，检查是否进入任一碰撞盒。"""
         n = max(2, int(math.hypot(bx - ax, by - ay) / 0.1))
@@ -440,10 +545,251 @@ class MissionNode(Node):
                 return True
         return False
 
+    def _wall_at(self, x, y, inflate):
+        """r64: 返回包含 (x,y) 的墙（外扩 inflate），无则 None。"""
+        for w in self._wallcs:
+            wx, wy, c, s, hl, hw = w
+            dx, dy = x - wx, y - wy
+            if abs(c * dx - s * dy) <= hl + inflate and \
+               abs(s * dx + c * dy) <= hw + inflate:
+                return w
+        return None
+
+    def _wall_hit(self, x, y, inflate=None):
+        """r64: (x,y) 是否落在任一墙体外扩 inflate 内（传送防穿墙核心校验）。"""
+        return self._wall_at(x, y, self._WLIN if inflate is None else inflate) \
+            is not None
+
+    def _wall_seg_hit(self, ax, ay, bx, by, inflate=None, head_skip=0.30):
+        """r64: 线段切墙检测（0.05m 采样）。head_skip 段内只用 0.05 余量——
+        容忍起点自身的取放站位贴墙，只拦真正"穿过去"的段。"""
+        inf = self._WLIN if inflate is None else inflate
+        length = math.hypot(bx - ax, by - ay)
+        n = max(2, int(length / 0.05))
+        for i in range(n + 1):
+            t = i / n
+            keep = 0.05 if t * length < head_skip else inf
+            if self._wall_hit(ax + (bx - ax) * t, ay + (by - ay) * t, keep):
+                return True
+        return False
+
+    _WGRID = 0.30        # 绕墙 A* 栅格边长（m）
+
+    def _wall_route_plan(self, a, b):
+        """r64: 栅格 A* 生成 a→b 的无墙网关序列（不含 a，含 b）；无解返回 None。
+
+        传送步进（SetEntityState）不经过物理，撞墙会直接"穿过去"，所以
+        直驱航点必须自身就是无墙折线。判定余量 = _WLIN（与步进阈值一致；
+        早期用 _WLIN+0.06 会把红3/蓝3 这类 0.315m 贴墙站位判成"终点不可
+        达"→整腿退 Nav2）。起点豁免（取放站位允许贴墙）。
+        栅格 0.30m、场域 ±16m，航点表长度 < 120，单次规划 ~10ms 量级。"""
+        inf = self._WLIN
+        if self._wall_hit(a[0], a[1], inf * 0.5):
+            return None                      # 起点本身深陷墙内，无解
+        if self._wall_seg_hit(a[0], a[1], b[0], b[1], inf):
+            if self._wall_hit(b[0], b[1], self._WLIN):
+                return None                  # 终点深陷墙内（站位需重标）
+        else:
+            return [b]                       # 直线可通，无需绕行
+        import heapq
+        g = self._WGRID
+
+        def key(x, y):
+            return (int(round(x / g)), int(round(y / g)))
+
+        def pos(kx, ky):
+            return (kx * g, ky * g)
+
+        sx, sy = key(a[0], a[1])
+        tx, ty = key(b[0], b[1])
+        start, goal = (sx, sy), (tx, ty)
+        gx0, gy0 = pos(*goal)
+        # 目标格若被膨胀覆盖（站位贴墙），就近吸附到可通行格
+        # r64c: 目标判定用 _WLIN（0.26）而非规划带 0.32——红3等站位距墙
+        # 0.315m 是设计值，若按 0.32 判会把整条腿判无解退 Nav2
+        if self._wall_hit(*pos(*goal), self._WLIN):
+            best = None
+            for dx in range(-4, 5):
+                for dy in range(-4, 5):
+                    k = (goal[0] + dx, goal[1] + dy)
+                    x, y = pos(*k)
+                    if not self._wall_hit(x, y, self._WLIN):
+                        d = math.hypot(x - b[0], y - b[1]) + \
+                            math.hypot(x - a[0], y - a[1]) * 0.02
+                        if best is None or d < best[0]:
+                            best = (d, k)
+            if best is None:
+                return None
+            goal = best[1]
+            gx0, gy0 = pos(*goal)
+        if goal == start:
+            return [b]
+        # 搜索场域=整屋固定范围（长墙的绕行端点常在 a-b 包围盒外，
+        # 例：北房→南区必须绕 Wall_40 西端 x=0.03，跨 8m+）
+        minx, maxx = -16.0, 15.5
+        miny, maxy = -16.0, 6.0
+        openh = [(0.0, 0, start, None)]
+        came, gsc = {}, {start: 0.0}
+        seen = set()
+        root = start
+        while openh:
+            f, _, k, parent = heapq.heappop(openh)
+            if k in seen:
+                continue
+            seen.add(k)
+            came[k] = parent
+            if k == goal:
+                break
+            if len(seen) > 60000:
+                return None
+            kx, ky = k
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    if dx == 0 and dy == 0:
+                        continue
+                    nk = (kx + dx, ky + dy)
+                    if nk in seen:
+                        continue
+                    x, y = pos(*nk)
+                    if not (minx <= x <= maxx and miny <= y <= maxy):
+                        continue
+                    if self._wall_hit(x, y, inf):
+                        continue
+                    if dx and dy:            # 斜边不许穿墙角
+                        if self._wall_hit(*pos(kx + dx, ky), inf) or \
+                           self._wall_hit(*pos(kx, ky + dy), inf):
+                            continue
+                    ng = gsc[k] + math.hypot(dx, dy) * g
+                    if ng < gsc.get(nk, 1e18):
+                        gsc[nk] = ng
+                        h = math.hypot(x - gx0, y - gy0)
+                        came[nk] = k
+                        heapq.heappush(openh, (ng + h, len(seen), nk, k))
+        if goal not in came:
+            return None
+        path = []
+        k = goal
+        while k != root:
+            path.append(k)
+            k = came[k]
+        path.reverse()
+        pts = [pos(*k) for k in path]
+        pts.append((b[0], b[1]))
+        # 视线平滑：能直连就合并，网关数从格点数降到转角数
+        out = []
+        k = -1                       # -1 代表起点 a
+        anchor = (a[0], a[1])
+        while k < len(pts) - 1:
+            m = len(pts) - 1
+            while m > k + 1 and self._wall_seg_hit(
+                    anchor[0], anchor[1], pts[m][0], pts[m][1], inf,
+                    head_skip=0.30):
+                m -= 1
+            out.append(pts[m])
+            anchor = pts[m]
+            k = m
+        return out
+
+    def _wall_clear(self, x, y):
+        """r64: 到最近墙面的有符号间距（<0 = 落在墙体内）。"""
+        best = 1e9
+        for wx, wy, c, s, hl, hw in self._wallcs:
+            dx, dy = x - wx, y - wy
+            lx, ly = c * dx - s * dy, s * dx + c * dy
+            ox, oy = max(abs(lx) - hl, 0.0), max(abs(ly) - hw, 0.0)
+            d = math.hypot(ox, oy)
+            if d < 1e-9:
+                d = -min(hl - abs(lx), hw - abs(ly))
+            if d < best:
+                best = d
+        return best
+
+    def _wall_step_ok(self, cx, cy, nx, ny, bearing, margin=None):
+        """r64 单调不变式：步进点必须"安全"或"正在脱离墙体"。
+
+        只判"点是否在膨胀区内"会死锁——一旦因抖动/传送偏差落进膨胀区，
+        之后每步都被判阻挡→反复重规划（实机 12 连击）。改为比较当前与
+        下一步的间距：变浅（逃离）一律放行，变深才拦。
+        r64b 修复：携带尖端项此前会"放行"身体入墙（尖端在墙另一侧间距变大
+        就判 True，实机表现为整车穿 Wall_31）。现在身体项规定为硬约束，
+        尖端只在"又近又变深"时追加拦截，绝不放宽身体规则。"""
+        inf = self._WLIN if margin is None else margin
+        c1 = self._wall_clear(nx, ny)
+        if c1 < inf and c1 <= self._wall_clear(cx, cy) + 1e-6:
+            return False                      # 身体比现状更深：拦
+        if getattr(self, '_carrying', False):
+            fx = nx + 0.42 * math.cos(bearing)
+            fy = ny + 0.42 * math.sin(bearing)
+            c2 = self._wall_clear(fx, fy)
+            if c2 < 0.10 and c2 <= self._wall_clear(
+                    cx + 0.42 * math.cos(bearing),
+                    cy + 0.42 * math.sin(bearing)) + 1e-6:
+                return False                  # 尖端贴墙且更深：拦
+        return True
+
+    def _wall_blocked(self, x, y, bearing):
+        """r64: 步进点是否撞墙（仅机器人本体；携带方块时前端另算）。"""
+        return self._wall_hit(x, y)
+
+    def _wall_side_step(self, cx, cy, nx, ny, bearing, spot):
+        """r64: 挡墙时先试局部侧移（±0.35/0.6 m，带前向分量）。
+
+        只做"小步让开"——取件/放件站位本身贴墙时，A* 会把整条腿重算成
+        绕远路（实机 265s 就是这么来的）。侧移失败才交给 A* 全局重规划。"""
+        c_now = self._wall_clear(cx, cy)
+        for sgn in (1.0, -1.0):
+            for lat in (0.35, 0.6, 0.9):
+                tx = nx + 0.12 * math.cos(bearing) - sgn * lat * math.sin(bearing)
+                ty = ny + 0.12 * math.sin(bearing) + sgn * lat * math.cos(bearing)
+                if self._wall_clear(tx, ty) <= max(c_now, self._WLIN) - 1e-6:
+                    continue                  # 不得比现状更贴墙
+                if self._wall_seg_hit(cx, cy, tx, ty, head_skip=0.25):
+                    continue
+                if self._obstacle_blocking(tx, ty, 0.75):
+                    continue
+                if self._cube_blocking(tx, ty, 0.37, (spot['x'], spot['y'])):
+                    continue
+                return (tx, ty)
+        return None
+
+    def _selfcheck_walls(self):
+        """r64 静态自检：开机核验全部取放腿都能给出无墙网关序列（只查几何，
+        不依赖定位）。失败项写日志，便于裁判/复盘第一时间发现走廊被堵。"""
+        try:
+            wp = self.wp
+        except Exception as e:      # noqa: BLE001
+            self.get_logger().warning(f'[r64] 走廊自检跳过（航点缺失: {e}）')
+            return
+        cubes_wp = wp.get('cubes', {})
+        zones_wp = wp.get('zones', {})
+        spots = [('home', wp.get('home', {'x': 0.0, 'y': 0.0}))]
+        for k, v in list(cubes_wp.items()) + list(zones_wp.items()):
+            spots.append((k, v))
+        bad = []
+        for zn, zv in zones_wp.items():
+            for sn, sv in spots:
+                r = self._wall_route_plan((sv['x'], sv['y']), (zv['x'], zv['y']))
+                if r is None:
+                    bad.append(f'{sn}->{zn}')
+        for sn, sv in spots:
+            r = self._wall_route_plan((0.0, 0.0), (sv['x'], sv['y']))
+            if r is None:
+                bad.append(f'home->{sn}')
+        if bad:
+            self.get_logger().warning(
+                f'[r64] 走廊自检: {len(bad)} 条腿无解（将回退 Nav2）: '
+                + ', '.join(bad[:12]))
+        else:
+            self.get_logger().info(
+                f'[r64] 走廊自检通过: {len(spots)} 个站位 × {len(zones_wp)} '
+                f'放置区全部可绕行（零穿墙）')
+
     def _direct_leg(self, spot):
         """r40: 同带腿直驱链（末位=spot），不适用返回 None（走 Nav2）。
-        N→N: Wall_31 护点(东源 3.9,2.5 / 其余 0,2.2)；S→S: 直线
-        （全部南区站位/区域两两直线已对 officeroom 碰撞盒核验）。"""
+        N→N: Wall_31 护点(东源 3.9,2.8 / 其余 0,2.2)；S→S: 直线
+        （全部南区站位/区域两两直线已对 officeroom 碰撞盒核验）。
+        r64: 东护点 2.5→2.8——原 2.5 距 Wall_31 北端仅 0.19m，机器人半径
+        0.30 会切墙角（实拍穿墙点之一）。"""
         cur = self._amcl_xy
         if cur is None:
             return None
@@ -451,7 +797,7 @@ class MissionNode(Node):
         if cy > -3.0 and gy > -3.0:
             chain = []
             if self._seg_hits_box(cur[0], cur[1], spot['x'], spot['y'], self._W31M):
-                guard = ({'x': 3.9, 'y': 2.5, 'yaw': 0.0} if cur[0] > 3.9
+                guard = ({'x': 3.9, 'y': 2.8, 'yaw': 0.0} if cur[0] > 3.9
                          else {'x': 0.0, 'y': 2.2, 'yaw': 0.0})
                 chain.append(guard)
             chain.append(spot)
@@ -509,7 +855,7 @@ class MissionNode(Node):
             if cur[1] > -3.0:
                 chain = []
                 if self._seg_hits_box(cur[0], cur[1], X['x'], X['y'], self._W31M):
-                    chain.append({'x': 3.9, 'y': 2.5, 'yaw': 0.0})
+                    chain.append({'x': 3.9, 'y': 2.8, 'yaw': 0.0})
                 chain += [X, rally, funnel]
             elif not self._seg_hits_box(cur[0], cur[1],
                                         funnel['x'], funnel['y'], self._OBS2BOX):
@@ -683,6 +1029,8 @@ class MissionNode(Node):
         # 0.6-0.8m/s)。SetEntityState 为确定性传送，外推零漂移；每 8 步
         # 用 AMCL 校正，偏差>0.4m(服务丢失/被回置)才重同步。
         _cx, _cy = _sx, _sy
+        self._wall_det_cnt = 0   # r64: 本腿墙体绕行重规划次数（防死循环烧预算）
+        self._wall_route = []    # r64: 当前绕墙网关队列（队首=临时子目标）
         while time.monotonic() - t0 < timeout:
             if self._fuse_blown:
                 return False
@@ -695,10 +1043,15 @@ class MissionNode(Node):
                 if math.hypot(_cx - self._amcl_xy[0],
                               _cy - self._amcl_xy[1]) > 0.4:
                     _cx, _cy = self._amcl_xy
-            dx = spot['x'] - _cx
-            dy = spot['y'] - _cy
+            gx, gy = (self._wall_route[0] if self._wall_route
+                      else (spot['x'], spot['y']))
+            dx = gx - _cx
+            dy = gy - _cy
             dist = math.hypot(dx, dy)
-            if dist < tol:
+            if dist < (0.35 if self._wall_route else tol):
+                if self._wall_route:
+                    self._wall_route.pop(0)
+                    continue
                 _el = time.monotonic() - t0
                 self.get_logger().info(
                     f'[ap] OK {_sd:.1f}m {_el:.0f}s eff={_sd / max(_el, 0.1):.2f}m/s')
@@ -713,16 +1066,48 @@ class MissionNode(Node):
             _iter_t0 = time.monotonic()
             nx = _cx + step * math.cos(bearing)
             ny = _cy + step * math.sin(bearing)
-            # 评分项5 避障：下一步进点被移动障碍占据 → 等待让开（不硬撞）
-            if self._obstacle_blocking(nx, ny, 0.75):
-                if not self._wait_obstacle(nx, ny,
-                                           time.monotonic() + 20.0,
-                                           '直驱途中'):
+            # r64: 障碍正逼近本体（追尾）→ 沿背离方向后退一步，不给它撞上
+            _retreat = self._obstacle_closing_vec(_cx, _cy)
+            if _retreat is not None:
+                nx = _cx + 0.12 * _retreat[0]
+                ny = _cy + 0.12 * _retreat[1]
+            # r64 穿墙修复：传送步进不得切墙——先局部侧移，再 A* 绕墙重规划
+            if not self._wall_step_ok(_cx, _cy, nx, ny, bearing):
+                det = self._wall_side_step(_cx, _cy, nx, ny, bearing, spot)
+                if det:
+                    nx, ny = det
+                else:
+                    if self._wall_det_cnt < 6:
+                        self._wall_route = []
+                        route = self._wall_route_plan((_cx, _cy),
+                                                      (spot['x'], spot['y']))
+                        if route:
+                            self._wall_det_cnt += 1
+                            self._wall_route = list(route)
+                            self.get_logger().info(
+                                f'[r64] 绕墙重规划 #{self._wall_det_cnt}: '
+                                f'{len(route)} 个网关 -> {route[0][0]:.2f},'
+                                f'{route[0][1]:.2f}')
+                            continue
+                    self._state('直驱前路被墙体阻挡，改走 Nav2 避障')
+                    return False
+            # 评分项5 避障：障碍占据进点、或"扫掠带"内障碍逼近 → 让行
+            # （仅未进带时等；已进带时静止等于被追尾，应继续穿出）
+            _sweep_next = self._obstacle_sweep_blocking(nx, ny)
+            _sweep_now = self._obstacle_sweep_blocking(_cx, _cy)
+            if _retreat is None and (self._obstacle_blocking(nx, ny, 0.75) or (
+                    _sweep_next and not _sweep_now)):
+                if not self._wait_obstacle(
+                        nx, ny, time.monotonic() + 20.0, '直驱途中',
+                        blocking=lambda: (
+                            self._obstacle_blocking(nx, ny, 0.75)
+                            or (self._obstacle_sweep_blocking(nx, ny)
+                                and not self._obstacle_sweep_blocking(_cx, _cy)))):
                     self._state('直驱途中障碍等待超时，改走 Nav2 避障')
                     return False
             # r50 评分项5 加固：非目标方块也是障碍——侧向绕行，绕不开才退 Nav2
             _spot_xy = (spot['x'], spot['y'])
-            if self._cube_blocking(nx, ny, 0.37, _spot_xy):
+            if _retreat is None and self._cube_blocking(nx, ny, 0.37, _spot_xy):
                 det = None
                 # r51: 偏移必须>判定圈0.42，单块在0.55档数学上必解（r50满负载
                 # 实测 0.35<0.42 → 侧绕点仍在圈内 → 单块即卡死退Nav2白耗120s）
@@ -732,7 +1117,9 @@ class MissionNode(Node):
                         tx = nx + 0.15 * math.cos(bearing) - sgn * lat * math.sin(bearing)
                         ty = ny + 0.15 * math.sin(bearing) + sgn * lat * math.cos(bearing)
                         if not self._cube_blocking(tx, ty, 0.37, _spot_xy) and \
-                           not self._obstacle_blocking(tx, ty, 0.75):
+                           not self._obstacle_blocking(tx, ty, 0.75) and \
+                           not self._wall_blocked(tx, ty, bearing) and \
+                           not self._wall_seg_hit(_cx, _cy, tx, ty):
                             det = (tx, ty)
                             break
                     if det:
@@ -788,7 +1175,7 @@ class MissionNode(Node):
                     {'x': -1.0, 'y': -2.0, 'yaw': 90.0},
                     {'x': -0.8, 'y': 0.8, 'yaw': 90.0}]
         if self._seg_hits_box(-0.8, 0.8, spot['x'], spot['y'], self._W31M):
-            chain_mn.append({'x': 3.9, 'y': 2.5, 'yaw': 0.0})
+            chain_mn.append({'x': 3.9, 'y': 2.8, 'yaw': 0.0})
         chain_mn.append(spot)
         ok_mn = True
         for wp in chain_mn:
@@ -979,7 +1366,7 @@ class MissionNode(Node):
                         {'x': -1.0, 'y': -2.0, 'yaw': 90.0},
                         {'x': -0.8, 'y': 0.8, 'yaw': 90.0}]
             if self._seg_hits_box(-0.8, 0.8, spot['x'], spot['y'], self._W31M):
-                chain_mn.append({'x': 3.9, 'y': 2.5, 'yaw': 0.0})
+                chain_mn.append({'x': 3.9, 'y': 2.8, 'yaw': 0.0})
             chain_mn.append(spot)
             ok_mn = True
             for wp in chain_mn:
@@ -1011,7 +1398,7 @@ class MissionNode(Node):
             mchain = []
             if self._seg_hits_box(self._amcl_xy[0], self._amcl_xy[1],
                                   -0.8, 0.8, self._W31M):
-                mchain.append({'x': 3.9, 'y': 2.5, 'yaw': 0.0})
+                mchain.append({'x': 3.9, 'y': 2.8, 'yaw': 0.0})
             mchain += [{'x': -0.8, 'y': 0.8, 'yaw': -90.0},
                        {'x': -0.8, 'y': -7.3, 'yaw': -90.0},
                        {'x': -2.6, 'y': -7.8, 'yaw': -90.0}, spot]
@@ -1203,6 +1590,7 @@ class MissionNode(Node):
             cube = f'{color}_cube_{i}'
             self._state(f'前往 {COLOR_CN.get(color, color)} 方块 {i}')
             self._carrying = False
+            self._carry_name = None
             if not self._goto(spot, cube):
                 self._state(f'放弃 {cube}')
                 continue
@@ -1211,6 +1599,7 @@ class MissionNode(Node):
             self._progress(f'{COLOR_CN.get(color, color)} {i}/{count} 已抓取')
             self._state(f'前往 {zone} 区放置')
             self._carrying = True
+            self._carry_name = cube
             ok_zone = self._goto(zone_spot, zone, retries=3)
             # r11 起落点为区内槽位绝对坐标（与站位解耦），±0.05m 精对位
             # 是旧相对落点逻辑遗留，每次多耗 4-8s（r14 复盘）。放宽为
@@ -1244,6 +1633,10 @@ class MissionNode(Node):
             self.arm.place(cube, x=dx if in_zone else None,
                            y=dy if in_zone else None)
             self._backup()
+            # r64: 放置完成即清携带态——旧版只在下一任务开始才清，导致
+            # 返程/派单腿带着"幽灵车头方块"跑（误触发尖端墙检+慢档步长）
+            self._carrying = False
+            self._carry_name = None
             if in_zone:
                 ledger = getattr(self, '_round_ledger', [])
                 ledger.append({'color': color, 'i': i, 'zone': zone, 'n': 1})

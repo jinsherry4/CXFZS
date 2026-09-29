@@ -41,9 +41,14 @@ class ObstacleMover(Node):
         self.declare_parameter('rate_hz', 20.0)
         self.declare_parameter('k_p', 3.0)
         self.declare_parameter('k_yaw', 2.0)
+        # r64: 自由轴（非巡逻轴）车道保持增益——被机器人推离巡逻线后自动回位。
+        # 实测 obstacle_1 被推至 x=-2.26（设计车道 -1.66）后永不回归，
+        # 导致"沿走廊巡逻"审计形态失真且避障几何假设失效。
+        self.declare_parameter('k_hold', 1.2)
         cfg = yaml.safe_load(self.get_parameter('obstacles').value) or []
         self.k_p = float(self.get_parameter('k_p').value)
         self.k_yaw = float(self.get_parameter('k_yaw').value)
+        self.k_hold = float(self.get_parameter('k_hold').value)
         self.items = []
         for it in cfg:
             amp = float(it.get('amp', 2.0))
@@ -96,8 +101,10 @@ class ObstacleMover(Node):
                 v_axis = v_ff + self.k_p * (p_ref - p_actual)
                 if it['axis'] == 'x':
                     msg.linear.x = v_axis
+                    msg.linear.y = self.k_hold * (it['y'] - py)   # r64 自由轴回位
                 else:
                     msg.linear.y = v_axis
+                    msg.linear.x = self.k_hold * (it['x'] - px)   # r64 自由轴回位
                 msg.angular.z = -self.k_yaw * yaw
             lim = it['v_max']
             msg.linear.x = max(-lim, min(lim, msg.linear.x))
