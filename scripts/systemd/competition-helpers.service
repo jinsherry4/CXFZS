@@ -1,0 +1,15 @@
+[Unit]
+Description=competition helpers (truth_odom + loc_shim + cam_jpeg)
+After=network-online.target
+
+[Service]
+Type=simple
+User=ros
+Environment="ROS_DOMAIN_ID=0"
+Environment="HOME=/home/ros"
+ExecStart=/home/ros/competition_helpers.sh
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

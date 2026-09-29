@@ -53,7 +53,8 @@ pkill -f 'gz[s]erver' 2>/dev/null; pkill -f 'gz[c]lient' 2>/dev/null; pkill -f '
 pkill -f '[g]azebo --verbose' 2>/dev/null   # r48: GUI gazebo 二进制不在 gzserver/gzclient 模式内
 pkill -f '[m]ission_node' 2>/dev/null; pkill -f '[l]lm_parser' 2>/dev/null; pkill -f '[o]bstacle_mover' 2>/dev/null
 pkill -f '[c]md_vel_watchdog' 2>/dev/null; pkill -f '[c]arry_follower' 2>/dev/null; pkill -f '[q]uestion_bridge' 2>/dev/null; pkill -f '[s]can_filter' 2>/dev/null
-pkill -f '[t]ruth_odom' 2>/dev/null; pkill -f '[l]oc_shim' 2>/dev/null
+pkill -f '[t]ruth_odom' 2>/dev/null; pkill -f '[l]oc_shim' 2>/dev/null; pkill -f '[c]am_jpeg' 2>/dev/null   # v4: 辅助进程 systemd helpers 约3s自愈复活
+pkill -f 'lib/competition_bringup/[r]eferee_node' 2>/dev/null   # v4: 清老install launch拉起的残留referee（systemd referee_entry.py不杀）
 pkill -f '[r]osbridge' 2>/dev/null; pkill -f '[r]osapi' 2>/dev/null
 pkill -f '[c]omponent_container' 2>/dev/null; pkill -f '[r]obot_state_publisher' 2>/dev/null; pkill -f '[s]pawner' 2>/dev/null
 sleep 1
@@ -131,8 +132,13 @@ done
 if [ "$MAP_OK" != "1" ]; then
   echo "  警告: /map 健康门 90s 未通过 (map_server=${ST:-无响应}, /map宽=${MW:-无})，继续启动但需人工核查 nav.log"
 fi
-( nohup python3 ~/truth_odom.py > /tmp/truth_odom.log 2>&1 ) &
-( nohup python3 ~/loc_shim.py > /tmp/loc_shim.log 2>&1 ) &
+# v4: 定位垫片常驻由 systemd competition-helpers 承担（步骤1 pkill 后 ~3s 自愈）；
+#     等待其复活，超时才手动兜底拉起——杜绝与 systemd 双实例并存。
+for hi in 1 2 3 4 5 6 7 8; do pgrep -f '[l]oc_shim.py' >/dev/null && break; sleep 2; done
+if ! pgrep -f '[l]oc_shim.py' >/dev/null; then
+  ( nohup python3 ~/truth_odom.py > /tmp/truth_odom.log 2>&1 ) &
+  ( nohup python3 ~/loc_shim.py > /tmp/loc_shim.log 2>&1 ) &
+fi
 sleep 3
 # 出生点校验：非全新世界（机器人停在上一轮终点）会让整轮任务在错误前提执行
 OX=''; OY=''
@@ -151,8 +157,10 @@ if [ -n "$OX" ] && [ -n "$OY" ]; then
   fi
 fi
 
-echo '[4.5/6] 启动相机 JPEG 压缩转发(供 coStudio 可靠渲染)...'
-( nohup python3 /home/ros/cam_jpeg.py > /tmp/cam_jpeg.log 2>&1 ) &
+echo '[4.5/6] 相机 JPEG 压缩转发(systemd 常驻, 缺失才兜底拉起)...'
+if ! pgrep -f '[c]am_jpeg.py' >/dev/null; then
+  ( nohup python3 /home/ros/cam_jpeg.py > /tmp/cam_jpeg.log 2>&1 ) &
+fi
 
 echo '[5/6] 启动 rosbridge(coStudio 连 ws://本机IP:9090)...'
 nohup ros2 launch rosbridge_server rosbridge_websocket_launch.xml > ~/comp_logs/rosbridge.log 2>&1 &

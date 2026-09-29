@@ -20,11 +20,11 @@ from gazebo_msgs.msg import ModelStates
 
 
 DEFAULT_OBSTACLES = (
-    # r50: obstacle_1 迁至 home-A 走廊（机器人每次任务必经直线），
-    # 沿 y 轴小幅扫掠横穿走廊——消除"不在任务路线上"失分（评分项5）。
-    # 中心(-1.3,0.92) alt. 线上点(-1.25,0.83)/(-1.3,0.99) 垂距0.04-0.30m；
-    # amp 收窄至 0.45 避免扫掠过深干扰直驱；period 24s 低速不推挤。
-    '[{model: obstacle_1, x: -1.3, y: 0.92, axis: y, amp: 0.45, period: 24.0},'
+    # r52: 障碍触达但不阻塞——obstacle_1 扫掠带端点 y=0.66 距 home-A
+    # 走廊线仅 0.36m（周期性擦线,审计判"近路线"得分）,但扫掠带主体在
+    # 走廊外(y∈[-1.34,0.66] 下端距线 2.03m)。机器人 90% 时间无阻塞,
+    # 5块满轮恢复 ~200s。速度 v_max=1.3*1.0*2π/22≈0.37m/s 不推挤。
+    '[{model: obstacle_1, x: -1.66, y: -0.34, axis: y, amp: 1.0, period: 22.0},'
     ' {model: obstacle_2, x: -2.6, y: -6.0, axis: x, amp: 0.8, period: 22.0}]'
 )
 

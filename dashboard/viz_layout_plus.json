@@ -285,23 +285,29 @@
       "scene": {},
       "transforms": {},
       "topics": {
-        "/plan": {
+        "/map_clean": {
           "visible": true
+        },
+        "/viz/scene": {
+          "visible": true
+        },
+        "/plan": {
+          "visible": false
         },
         "/local_plan": {
-          "visible": true
+          "visible": false
         },
         "/global_costmap/footprint": {
-          "visible": true
+          "visible": false
         },
         "/scan": {
-          "visible": true
+          "visible": false
         },
         "/map": {
-          "visible": true
+          "visible": false
         },
         "/map_volatile": {
-          "visible": true
+          "visible": false
         }
       },
       "layers": {},

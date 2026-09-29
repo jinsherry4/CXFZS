@@ -281,7 +281,9 @@ function subscribeAll() {
   let jpegBuf = null;
   function drawCameraCompressed(m) {
     try {
-      jpegBuf = 'data:image/jpeg;base64,' + btoa(m.data);
+      // m.data 已是 rosbridge JSON 的 base64 字符串——直接拼 data URL，
+      // 再 btoa 会双重编码致解码静默失败（09-22 修复）
+      jpegBuf = 'data:image/jpeg;base64,' + m.data;
       camimg.src = jpegBuf;
     } catch (e) {}
   }

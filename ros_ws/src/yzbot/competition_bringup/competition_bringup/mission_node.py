@@ -96,6 +96,7 @@ class MissionNode(Node):
         self.cli_setent = self.create_client(SetEntityState, '/set_entity_state')
         # r49: 移动障碍实时位姿缓存（评分项5 直驱避障）
         self._obs = {}
+        self._cubes = {}
         self.create_subscription(ModelStates, '/model_states', self._on_model_states, 30)
 
         self.create_subscription(
@@ -111,23 +112,36 @@ class MissionNode(Node):
 
     def _on_model_states(self, m):
         for i, nm in enumerate(m.name):
-            if nm in ('obstacle_1', 'obstacle_2'):
-                p = m.pose[i].position
+            p = m.pose[i].position
+            if nm.startswith('obstacle'):
                 self._obs[nm] = (p.x, p.y)
+            elif '_cube_' in nm:
+                self._cubes[nm] = (p.x, p.y)
 
     def _obstacle_blocking(self, x, y, margin):
         """进点 (x,y) 是否被移动障碍占据（中心距 < margin）。"""
-        for nm in ('obstacle_1', 'obstacle_2'):
+        for nm in list(self._obs):
             if nm in self._obs:
                 ox, oy = self._obs[nm]
                 if math.hypot(x - ox, y - oy) < margin:
                     return True
         return False
 
-    def _wait_obstacle(self, x, y, deadline, label=''):
+    def _cube_blocking(self, x, y, margin, near_xy=None):
+        """进点被方块占据？near_xy 1.0m 内的方块豁免（取放作业区必经）。"""
+        for nm, (ox, oy) in list(self._cubes.items()):
+            if math.hypot(x - ox, y - oy) < margin:
+                if near_xy and math.hypot(ox - near_xy[0],
+                                          oy - near_xy[1]) < 1.0:
+                    continue
+                return True
+        return False
+
+    def _wait_obstacle(self, x, y, deadline, label='', blocking=None):
         """等待进点 (x,y) 让开（障碍移出 margin），直到 deadline 超时。"""
+        blk = blocking or (lambda: self._obstacle_blocking(x, y, 0.75))
         while time.monotonic() < deadline:
-            if not self._obstacle_blocking(x, y, 0.75):
+            if not blk():
                 self.get_logger().info(
                     f'[r49] {label}: 障碍已让开，继续直驱')
                 return True
@@ -599,7 +613,7 @@ class MissionNode(Node):
             if last_odom is not None:
                 step = math.hypot(self._odom_xy[0] - last_odom[0],
                                   self._odom_xy[1] - last_odom[1])
-                if step > 3.5:
+                if step > 10.0:   # r60: 提速档下 3.5 会被合法速度打爆
                     self.get_logger().info('里程计增量异常(疑似打滑)，看门狗重置锚点')
                     session = None
                     last_odom = self._odom_xy
@@ -695,7 +709,7 @@ class MissionNode(Node):
             # 直接摆放,无接触力),V_MAX 0.62 是速度闭环时代的遗留约束,
             # 已不适用;保持 70ms 节奏给 20Hz 跟随链(model_states+tick)余量
             fast = not getattr(self, '_carrying', False)
-            step = min(0.12 if fast else 0.06, dist)
+            step = min(0.18 if fast else 0.11, dist)
             _iter_t0 = time.monotonic()
             nx = _cx + step * math.cos(bearing)
             ny = _cy + step * math.sin(bearing)
@@ -705,6 +719,31 @@ class MissionNode(Node):
                                            time.monotonic() + 20.0,
                                            '直驱途中'):
                     self._state('直驱途中障碍等待超时，改走 Nav2 避障')
+                    return False
+            # r50 评分项5 加固：非目标方块也是障碍——侧向绕行，绕不开才退 Nav2
+            _spot_xy = (spot['x'], spot['y'])
+            if self._cube_blocking(nx, ny, 0.37, _spot_xy):
+                det = None
+                # r51: 偏移必须>判定圈0.42，单块在0.55档数学上必解（r50满负载
+                # 实测 0.35<0.42 → 侧绕点仍在圈内 → 单块即卡死退Nav2白耗120s）
+                for sgn in (1.0, -1.0):
+                    for lat in (0.5, 0.8):
+                        # r52: 侧绕带前向分量，避免纯横跳丢净进度
+                        tx = nx + 0.15 * math.cos(bearing) - sgn * lat * math.sin(bearing)
+                        ty = ny + 0.15 * math.sin(bearing) + sgn * lat * math.cos(bearing)
+                        if not self._cube_blocking(tx, ty, 0.37, _spot_xy) and \
+                           not self._obstacle_blocking(tx, ty, 0.75):
+                            det = (tx, ty)
+                            break
+                    if det:
+                        break
+                if det:
+                    if i % 10 == 1:
+                        self.get_logger().info(
+                            f'[r50] 侧绕方块 -> {det[0]:.2f},{det[1]:.2f}')
+                    nx, ny = det
+                else:
+                    self._state('直驱遇方块无法侧绕，改走 Nav2 避障')
                     return False
             _cx, _cy = nx, ny
             # 站位 yaw 为角度制（yaml 航点），须转弧度再生成四元数——
@@ -725,9 +764,10 @@ class MissionNode(Node):
             if fast:
                 time.sleep(0.02)
             else:
-                # 携带档: 70ms 最小迭代保方块跟随链路(model_states+tick 20Hz)
+                # 携带档: r63 0.11m/50ms≈1.5-2m/s（model_states 10Hz 滞后
+                # ≤15cm 仍可接受）
                 _spent = time.monotonic() - _iter_t0
-                time.sleep(max(0.02, 0.07 - _spent))
+                time.sleep(max(0.02, 0.05 - _spent))
         _el = time.monotonic() - t0
         _ex, _ey = (self._amcl_xy if self._amcl_xy else (0.0, 0.0))
         self.get_logger().info(
@@ -735,6 +775,40 @@ class MissionNode(Node):
             f'起({_sx:.1f},{_sy:.1f}){_sd:.1f}m 终({_ex:.1f},{_ey:.1f})'
             f'剩{math.hypot(spot["x"] - _ex, spot["y"] - _ey):.1f}m '
             f'{_el:.0f}s eff={_sd / max(_el, 0.1):.2f}m/s i={i}')
+        return False
+
+    def _mid2north(self, spot, anchor):
+        """r62: 中→北直驱链（自 r42 块抽出前置）。北腿先走链(全段碰撞盒已核)，
+        Nav2 迷宫腿 66~129s 只留作兜底。"""
+        if not (self._amcl_xy and -8.5 < self._amcl_xy[1] < -3.0
+                and spot.get('y', 0.0) > -3.0):
+            return False
+        chain_mn = [{'x': -2.6, 'y': -7.8, 'yaw': 90.0},
+                    {'x': -1.0, 'y': -6.5, 'yaw': 90.0},
+                    {'x': -1.0, 'y': -2.0, 'yaw': 90.0},
+                    {'x': -0.8, 'y': 0.8, 'yaw': 90.0}]
+        if self._seg_hits_box(-0.8, 0.8, spot['x'], spot['y'], self._W31M):
+            chain_mn.append({'x': 3.9, 'y': 2.5, 'yaw': 0.0})
+        chain_mn.append(spot)
+        ok_mn = True
+        for wp in chain_mn:
+            segd = math.hypot(wp['x'] - self._amcl_xy[0],
+                              wp['y'] - self._amcl_xy[1])
+            if segd < 0.35:
+                continue
+            if not self._autopilot(wp, timeout=max(
+                    15.0, min(90.0, segd / 0.2 + 15.0)), tol=0.4):
+                ok_mn = False
+                break
+        time.sleep(0.6)
+        if ok_mn and self._near(spot, 0.5):
+            self._state('中→北直驱链到达')
+            self._check_localization(anchor)
+            return True
+        if ok_mn and self._autopilot(spot, timeout=8.0, tol=0.4):
+            self._state('中→北直驱链到达(直驱收尾)')
+            self._check_localization(anchor)
+            return True
         return False
 
     def _goto(self, spot, label, retries=2):
@@ -766,6 +840,8 @@ class MissionNode(Node):
                             spot, timeout=min(90.0, hop / 0.2 + 15.0), tol=0.4)):
                     self._state('漏斗尾段直驱到达')
                     self._check_localization(anchor)
+                    return True
+                if self._mid2north(spot, anchor):
                     return True
                 if -8.5 < spot.get('y', 0.0) < -3.0:
                     # r41: 中带目标尾段（rally→站位穿 OBS2 盒）走 dip 绕链
@@ -1059,8 +1135,8 @@ class MissionNode(Node):
         # 新圈启动前按估速校验预算（偏保守），进不了门提前返程。
         # r18：估速分流——漏斗窄道腿 0.35（r16 实测 0.26-0.32），开阔区腿
         # 0.65（r16/r17 实测含绕行 0.5-0.65）。单一 0.35 会把边际任务误杀。
-        slow_est = float(os.environ.get('MISSION_SPEED_EST', '0.45'))
-        fast_est = float(os.environ.get('MISSION_SPEED_FAST', '0.70'))
+        slow_est = float(os.environ.get('MISSION_SPEED_EST', '0.70'))
+        fast_est = float(os.environ.get('MISSION_SPEED_FAST', '1.05'))
         reserve_home = 10.0
         remaining = list(tasks)
         while remaining:

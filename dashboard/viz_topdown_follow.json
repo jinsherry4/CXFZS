@@ -12,8 +12,12 @@
    "activeTabIdx": 0,
    "tabs": [
     {
-     "title": "题目",
+     "title": "任务题目与解析",
      "layout": "RawMessages!3o3lizc"
+    },
+    {
+     "title": "任务日志(状态流)",
+     "layout": "RawMessages!37wr55x"
     }
    ]
   },
@@ -361,14 +365,7 @@
      "color": "#4ade80"
     },
     "/scan": {
-     "visible": true,
-     "colorField": "range",
-     "colorMode": "gradient",
-     "colorMap": "turbo",
-     "pointSize": 4,
-     "decayTime": 0.5,
-     "pointShape": "square",
-     "cubeSize": 0.06
+     "visible": false
     },
     "/robot_description": {
      "visible": true,
@@ -411,6 +408,16 @@
     },
     "/map_volatile": {
      "visible": true
+    },
+    "/scan_sync": {
+     "visible": true,
+     "colorField": "range",
+     "colorMode": "gradient",
+     "colorMap": "turbo",
+     "pointSize": 4,
+     "decayTime": 0.5,
+     "pointShape": "square",
+     "cubeSize": 0.06
     }
    },
    "layers": {

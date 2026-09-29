@@ -1,0 +1,16 @@
+[Unit]
+Description=competition referee_node (natural language task entry)
+After=network-online.target
+
+[Service]
+Type=simple
+User=ros
+Environment="ROS_DOMAIN_ID=0"
+Environment="HOME=/home/ros"
+EnvironmentFile=/home/ros/competition_referee.env
+ExecStart=/bin/bash -c "source /opt/ros/humble/setup.bash && source /home/ros/dev_ws/install/setup.bash && exec python3 /home/ros/referee_entry.py"
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

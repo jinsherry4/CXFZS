@@ -94,7 +94,7 @@ class ArmController:
     def move_arm(self, positions, duration=2.0):
         return self._send_traj(self._arm_ac, ARM_JOINTS, positions, duration)
 
-    def move_gripper(self, position, duration=0.45):
+    def move_gripper(self, position, duration=0.35):  # r63
         """夹爪开（0.3）/ 闭（0.0），单点轨迹。"""
         from builtin_interfaces.msg import Duration
         goal = FollowJointTrajectory.Goal()
@@ -135,10 +135,10 @@ class ArmController:
         slow = time.time() - t0 > 12.0
         if not slow:
             log.info('[arm] 探向方块')
-            self.move_arm(REACH, 0.9)
+            self.move_arm(REACH, 0.7)
             slow = time.time() - t0 > 12.0
         if not slow:
-            self.move_arm(GRASP, 0.7)
+            self.move_arm(GRASP, 0.55)
             slow = time.time() - t0 > 12.0
         if not slow:
             log.info('[arm] 闭合夹爪')
@@ -146,7 +146,7 @@ class ArmController:
             slow = time.time() - t0 > 12.0
         if not slow:
             log.info('[arm] 收臂至随行位')
-            self.move_arm(CARRY, 0.6)
+            self.move_arm(CARRY, 0.5)
         if slow:
             log.warn(f'臂序列超时({time.time()-t0:.0f}s)，转虚拟抓取')
         log.info('[arm] 启动随行搬运')
@@ -170,7 +170,7 @@ class ArmController:
         t0 = time.time()
         self.move_gripper(GRIP_OPEN)
         if time.time() - t0 <= 6.0:
-            self.move_arm(HOME, 1.1)
+            self.move_arm(HOME, 0.85)
         else:
             log.warn('臂收尾超时，跳过(方块已入区)')
         return True

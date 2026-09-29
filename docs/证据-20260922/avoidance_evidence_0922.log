@@ -1,0 +1,10 @@
+[mission_node-1] [INFO] [1790074253.684142492] [mission_node]: [状态] 任务完成
+[mission_node-1] [WARN] [1790074376.334787013] [mission_node]: [r49] 直驱途中: 障碍未让开，超时
+[mission_node-1] [INFO] [1790074376.335740134] [mission_node]: [状态] 直驱途中障碍等待超时，改走 Nav2 避障
+[mission_node-1] [INFO] [1790074425.452370077] [mission_node]: [r49] 直驱途中: 障碍已让开，继续直驱
+[mission_node-1] [INFO] [1790074487.286602300] [mission_node]: [状态] 第5轮完成: red×2→B区 | 用时131s
+[mission_node-1] [INFO] [1790074487.287377714] [mission_node]: [状态] 任务完成
+[验收轮 19:01 标准链路(移动障碍开启)自然触发避让 x2]
+[mission_node-1] [INFO] [1790074872.567622843] [mission_node]: [r49] 直驱途中: 障碍已让开，继续直驱
+[mission_node-1] [INFO] [1790074873.017694869] [mission_node]: [r49] 直驱途中: 障碍已让开，继续直驱
+[mission_node-1] [INFO] [1790074875.156290597] [mission_node]: [状态] 第1轮完成: red×1→A区 | 用时48s

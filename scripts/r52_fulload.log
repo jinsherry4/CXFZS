@@ -1,0 +1,14 @@
+[mission_node-1] [INFO] [1790081259.624568504] [mission_node]: [贪心] 选 red_1 成本18.8m 估时74s 已用0s/预算280s 候选5
+[mission_node-1] [INFO] [1790081275.039386973] [mission_node]: [贪心] 选 red_3 成本30.6m 估时100s 已用15s/预算280s 候选4
+[mission_node-1] [INFO] [1790081309.195267822] [mission_node]: [r50] 侧绕方块 -> -6.01,4.92
+[mission_node-1] [INFO] [1790081313.427595228] [mission_node]: [r50] 侧绕方块 -> 0.74,0.37
+[mission_node-1] [INFO] [1790081317.046358375] [mission_node]: [r50] 侧绕方块 -> 3.00,-4.63
+[mission_node-1] [INFO] [1790081318.454178145] [mission_node]: [r50] 侧绕方块 -> 1.69,-8.36
+[mission_node-1] [INFO] [1790081325.271633268] [mission_node]: [r50] 侧绕方块 -> -3.51,-14.49
+[mission_node-1] [INFO] [1790081326.690650251] [mission_node]: [r50] 侧绕方块 -> -7.04,-13.45
+[mission_node-1] [INFO] [1790081331.957760611] [mission_node]: [贪心] 选 red_2 成本40.5m 估时122s 已用72s/预算280s 候选3
+[mission_node-1] [INFO] [1790081342.868380485] [mission_node]: [r50] 侧绕方块 -> 2.10,-3.01
+[mission_node-1] [INFO] [1790081344.286627291] [mission_node]: [r50] 侧绕方块 -> -1.73,-1.89
+[mission_node-1] [INFO] [1790081368.496441988] [mission_node]: [r50] 侧绕方块 -> 2.77,-4.47
+[mission_node-1] [INFO] [1790081369.919199672] [mission_node]: [r50] 侧绕方块 -> 1.65,-8.25
+[mission_node-1] [INFO] [1790081372.813916694] [mission_node]: [r50] 侧绕方块 -> 0.62,-9.24

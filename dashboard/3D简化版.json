@@ -1,0 +1,57 @@
+{
+  "configById": {
+    "3D!simp": {
+      "cameraState": {
+        "perspective": true,
+        "distance": 40.0,
+        "phi": 30.0,
+        "thetaOffset": 0.0,
+        "targetOffset": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "target": [
+          -1.0,
+          -5.5,
+          0.0
+        ],
+        "targetOrientation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "fovy": 45.0,
+        "near": 0.5,
+        "far": 5000.0
+      },
+      "followMode": "follow-none",
+      "scene": {},
+      "transforms": {},
+      "topics": {
+        "/map_clean": {
+          "visible": true
+        },
+        "/viz/scene": {
+          "visible": true
+        }
+      },
+      "layers": {},
+      "publish": {
+        "type": "point",
+        "poseTopic": "/move_base_simple/goal",
+        "pointTopic": "/clicked_point",
+        "poseEstimateTopic": "/initialpose",
+        "poseEstimateXDeviation": 0.5,
+        "poseEstimateYDeviation": 0.5,
+        "poseEstimateThetaDeviation": 0.26179939
+      },
+      "imageMode": {},
+      "foxglovePanelTitle": "简化场景（墙壁/障碍/机器人）"
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "layout": "3D!simp"
+}
